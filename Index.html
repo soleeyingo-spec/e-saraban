@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <!-- viewport ถูกเพิ่มจาก Code.gs ด้วย addMetaTag แล้ว -->
+  <meta name="theme-color" content="#1e3a8a">
+  <title>ระบบงานสารบรรณอิเล็กทรอนิกส์ (e-Saraban)</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&family=Prompt:wght@300;400;500;600;700&family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
+  <link href="https://cdn.datatables.net/2.0.8/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+  <?!= include('CSS') ?>
+</head>
+<body class="is-login">
+
+<!-- ======================= Loading Overlay ======================= -->
+<div id="loadingOverlay" class="loading-overlay d-none" role="status" aria-live="polite">
+  <div class="loading-box">
+    <div class="spinner-border text-primary" style="width:3rem;height:3rem" aria-hidden="true"></div>
+    <div id="loadingText" class="mt-3 fw-medium">กำลังประมวลผล...</div>
+  </div>
+</div>
+
+<!-- ======================= Login ======================= -->
+<main id="loginView" class="login-wrap">
+  <section class="login-hero d-none d-lg-flex">
+    <div class="login-hero-inner">
+      <div class="login-logo"><i class="fa-solid fa-file-signature"></i></div>
+      <h1 class="display-5 fw-bold mb-2">e-Saraban</h1>
+      <p class="lead mb-4">ระบบงานสารบรรณอิเล็กทรอนิกส์สำหรับสถานศึกษา</p>
+      <ul class="login-features list-unstyled">
+        <li><i class="fa-solid fa-stamp"></i> ประทับตราเลขรับลงบนไฟล์ PDF อัตโนมัติ</li>
+        <li><i class="fa-solid fa-pen-nib"></i> เกษียนหนังสือพร้อมลายเซ็นอิเล็กทรอนิกส์</li>
+        <li><i class="fa-solid fa-bell"></i> แจ้งเตือนผู้รับผิดชอบผ่าน Telegram / Email</li>
+        <li><i class="fa-solid fa-route"></i> ติดตามงานและดูไทม์ไลน์ได้ทุกขั้นตอน</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="login-panel">
+    <form id="formLogin" class="login-card" autocomplete="on" novalidate>
+      <div class="text-center mb-4">
+        <div class="login-logo sm d-lg-none mx-auto mb-3"><i class="fa-solid fa-file-signature"></i></div>
+        <h2 class="h4 fw-bold mb-1" id="loginOrgName">ระบบงานสารบรรณอิเล็กทรอนิกส์</h2>
+        <div class="text-muted">เข้าสู่ระบบเพื่อใช้งาน</div>
+      </div>
+
+      <div id="loginError" class="alert alert-danger py-2 d-none" role="alert"></div>
+
+      <div class="mb-3">
+        <label for="loginUsername" class="form-label">ชื่อผู้ใช้</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="fa-solid fa-user"></i></span>
+          <input type="text" class="form-control" id="loginUsername" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        </div>
+      </div>
+      <div class="mb-3">
+        <label for="loginPassword" class="form-label">รหัสผ่าน</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="fa-solid fa-lock"></i></span>
+          <input type="password" class="form-control" id="loginPassword" name="password" autocomplete="current-password" required>
+          <button class="btn btn-outline-secondary" type="button" data-action="togglePassword" data-target="loginPassword" aria-label="แสดง/ซ่อนรหัสผ่าน"><i class="fa-solid fa-eye"></i></button>
+        </div>
+      </div>
+      <div class="form-check mb-4">
+        <input class="form-check-input" type="checkbox" id="loginRemember" name="remember">
+        <label class="form-check-label" for="loginRemember">จดจำการเข้าสู่ระบบ (30 วัน)</label>
+      </div>
+      <button type="submit" class="btn btn-primary w-100 btn-lg" id="btnLogin"><i class="fa-solid fa-right-to-bracket me-2"></i>เข้าสู่ระบบ</button>
+      <div class="text-center text-muted small mt-4">หากลืมรหัสผ่าน กรุณาติดต่อผู้ดูแลระบบ</div>
+    </form>
+  </section>
+</main>
+
+<!-- ======================= App ======================= -->
+<div id="appView" class="d-none">
+
+  <div class="sb-backdrop" data-action="closeSidebar"></div>
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="sidebar" aria-label="เมนูหลัก">
+    <div class="sb-brand">
+      <div class="sb-logo"><i class="fa-solid fa-file-signature"></i></div>
+      <div class="sb-brand-text">
+        <strong>e-Saraban</strong>
+        <small id="sbOrgName">-</small>
+      </div>
+      <button type="button" class="btn sb-close d-lg-none" data-action="closeSidebar" aria-label="ปิดเมนู"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+
+    <nav class="sb-nav" id="sbNav">
+      <a class="sb-link" href="#dashboard" data-page="dashboard" data-roles="Admin,Saraban,Director,Teacher"><i class="fa-solid fa-gauge-high"></i><span>หน้าหลัก</span></a>
+
+      <div class="sb-title">งานสารบรรณ</div>
+      <a class="sb-link" href="#incoming" data-page="incoming" data-roles="Admin,Saraban,Director"><i class="fa-solid fa-inbox"></i><span>หนังสือรับ</span></a>
+      <a class="sb-link" href="#endorse" data-page="endorse" data-roles="Director"><i class="fa-solid fa-pen-nib"></i><span>เกษียนหนังสือ</span><span class="sb-badge d-none" id="badgeEndorse">0</span></a>
+      <a class="sb-link" href="#tasks" data-page="tasks" data-roles="Admin,Saraban,Director,Teacher"><i class="fa-solid fa-list-check"></i><span>งานที่ได้รับมอบหมาย</span><span class="sb-badge d-none" id="badgeTasks">0</span></a>
+      <a class="sb-link" href="#outgoing" data-page="outgoing" data-roles="Admin,Saraban,Director,Teacher"><i class="fa-solid fa-paper-plane"></i><span>หนังสือส่ง</span></a>
+      <a class="sb-link" href="#orders" data-page="orders" data-roles="Admin,Saraban,Director,Teacher"><i class="fa-solid fa-scroll"></i><span>คำสั่งและประกาศ</span></a>
+
+      <div class="sb-title" data-roles="Admin,Saraban,Director">ติดตามและรายงาน</div>
+      <a class="sb-link" href="#tracking" data-page="tracking" data-roles="Admin,Saraban,Director"><i class="fa-solid fa-route"></i><span>ติดตามงาน</span></a>
+      <a class="sb-link" href="#reports" data-page="reports" data-roles="Admin,Saraban,Director"><i class="fa-solid fa-table-list"></i><span>ทะเบียนคุม/รายงาน</span></a>
+
+      <div class="sb-title" data-roles="Admin">ผู้ดูแลระบบ</div>
+      <a class="sb-link" href="#users" data-page="users" data-roles="Admin"><i class="fa-solid fa-users-gear"></i><span>จัดการผู้ใช้งาน</span></a>
+      <a class="sb-link" href="#settings" data-page="settings" data-roles="Admin"><i class="fa-solid fa-gear"></i><span>ตั้งค่าระบบ</span></a>
+    </nav>
+
+    <div class="sb-foot">
+      <div class="sb-user">
+        <div class="avatar" id="sbAvatar">?</div>
+        <div class="sb-user-text">
+          <div class="sb-user-name" id="sbUserName">-</div>
+          <small id="sbUserRole">-</small>
+        </div>
+      </div>
+      <button type="button" class="btn btn-sm btn-outline-light w-100 mt-2" data-action="logout"><i class="fa-solid fa-right-from-bracket me-2"></i>ออกจากระบบ</button>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <header class="topbar no-print">
+      <button type="button" class="btn btn-icon" data-action="toggleSidebar" aria-label="เปิด/ปิดเมนู"><i class="fa-solid fa-bars"></i></button>
+      <h1 id="pageTitle" class="topbar-title">หน้าหลัก</h1>
+      <div class="ms-auto d-flex align-items-center gap-2">
+        <button type="button" class="btn btn-icon" data-action="refreshPage" aria-label="รีเฟรชข้อมูล" title="รีเฟรชข้อมูล"><i class="fa-solid fa-rotate"></i></button>
+        <div class="dropdown">
+          <button class="btn user-btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <span class="avatar sm" id="topAvatar">?</span>
+            <span class="d-none d-md-inline" id="topUserName">-</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end shadow">
+            <li class="dropdown-header" id="topUserInfo">-</li>
+            <li><button class="dropdown-item" type="button" data-action="openProfile"><i class="fa-solid fa-signature fa-fw me-2"></i>ลายเซ็นของฉัน</button></li>
+            <li><button class="dropdown-item" type="button" data-action="openPassword"><i class="fa-solid fa-key fa-fw me-2"></i>เปลี่ยนรหัสผ่าน</button></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><button class="dropdown-item text-danger" type="button" data-action="logout"><i class="fa-solid fa-right-from-bracket fa-fw me-2"></i>ออกจากระบบ</button></li>
+          </ul>
+        </div>
+      </div>
+    </header>
+
+    <div class="content" id="content">
+
+      <!-- ========== 1) Dashboard ========== -->
+      <section class="page d-none" id="page-dashboard" data-title="หน้าหลัก">
+        <div class="row g-3 mb-3">
+          <div class="col-6 col-xl">
+            <div class="stat-card c-blue" data-go="incoming" data-roles="Admin,Saraban,Director">
+              <div class="stat-icon"><i class="fa-solid fa-inbox"></i></div>
+              <div><div class="stat-num" id="cardIncomingToday">0</div><div class="stat-label">หนังสือรับวันนี้</div></div>
+            </div>
+          </div>
+          <div class="col-6 col-xl" data-roles="Admin,Saraban,Director">
+            <div class="stat-card c-amber" data-go="endorse">
+              <div class="stat-icon"><i class="fa-solid fa-pen-nib"></i></div>
+              <div><div class="stat-num" id="cardPendingEndorse">0</div><div class="stat-label">รอผู้บริหารเกษียน</div></div>
+            </div>
+          </div>
+          <div class="col-6 col-xl">
+            <div class="stat-card c-green" data-go="tasks">
+              <div class="stat-icon"><i class="fa-solid fa-list-check"></i></div>
+              <div><div class="stat-num" id="cardMyTasks">0</div><div class="stat-label">งานที่ได้รับมอบหมาย (ของฉัน)</div></div>
+            </div>
+          </div>
+          <div class="col-6 col-xl">
+            <div class="stat-card c-red" data-go="tasks">
+              <div class="stat-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+              <div><div class="stat-num" id="cardOverdue">0</div><div class="stat-label">งานค้างเกินกำหนด</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-12 col-xl-8">
+            <div class="card h-100">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="fa-solid fa-chart-column me-2"></i>ปริมาณหนังสือรับ-ส่ง รายเดือน</span>
+                <span class="badge text-bg-light" id="chartYear">ปี -</span>
+              </div>
+              <div class="card-body"><div class="chart-box"><canvas id="chartMonthly" aria-label="กราฟหนังสือรับ-ส่งรายเดือน" role="img"></canvas></div></div>
+            </div>
+          </div>
+          <div class="col-12 col-xl-4">
+            <div class="card h-100">
+              <div class="card-header"><i class="fa-solid fa-bolt text-danger me-2"></i>หนังสือด่วนล่าสุด</div>
+              <div class="list-group list-group-flush" id="urgentList">
+                <div class="empty-state">ไม่มีรายการ</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 2) Incoming ========== -->
+      <section class="page d-none" id="page-incoming" data-title="หนังสือรับ">
+        <div class="page-head">
+          <div>
+            <h2 class="page-title">ทะเบียนหนังสือรับ</h2>
+            <div class="text-muted small">ลงรับหนังสือภายนอกและประทับตราเลขรับลงบนไฟล์ PDF</div>
+          </div>
+          <div class="d-flex flex-wrap gap-2">
+            <select id="filterIncomingStatus" class="form-select w-auto" aria-label="กรองสถานะ">
+              <option value="">ทุกสถานะ</option>
+              <option>รอเกษียน</option><option>เกษียนแล้ว</option><option>กำลังดำเนินการ</option><option>เสร็จสิ้น</option>
+            </select>
+            <button type="button" class="btn btn-primary" data-action="newIncoming" data-roles="Admin,Saraban"><i class="fa-solid fa-plus me-2"></i>ลงรับหนังสือใหม่</button>
+          </div>
+        </div>
+        <div class="card"><div class="card-body">
+          <div class="table-responsive">
+            <table id="tblIncoming" class="table table-hover align-middle w-100 tbl">
+              <thead><tr><th>เลขรับ</th><th>วันที่รับ</th><th>ที่หนังสือ</th><th>จาก</th><th>เรื่อง</th><th>ความเร็ว</th><th>สถานะ</th><th class="text-end no-sort">จัดการ</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div></div>
+      </section>
+
+      <!-- ========== 3) Endorse ========== -->
+      <section class="page d-none" id="page-endorse" data-title="เกษียนหนังสือ">
+        <div class="page-head">
+          <div>
+            <h2 class="page-title">หนังสือรอเกษียน</h2>
+            <div class="text-muted small">เลือกหนังสือเพื่อดูไฟล์ เขียนคำเกษียน และมอบหมายผู้รับผิดชอบ</div>
+          </div>
+        </div>
+        <div class="card"><div class="card-body">
+          <div class="table-responsive">
+            <table id="tblEndorse" class="table table-hover align-middle w-100 tbl">
+              <thead><tr><th>เลขรับ</th><th>วันที่รับ</th><th>จาก</th><th>เรื่อง</th><th>ความเร็ว</th><th class="text-end no-sort">จัดการ</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div></div>
+      </section>
+
+      <!-- ========== 4) Tasks ========== -->
+      <section class="page d-none" id="page-tasks" data-title="งานที่ได้รับมอบหมาย">
+        <div class="page-head">
+          <div>
+            <h2 class="page-title">งานที่ได้รับมอบหมาย</h2>
+            <div class="text-muted small">เปิดอ่านหนังสือที่เกษียนแล้ว และรายงานผลเมื่อดำเนินการเสร็จ</div>
+          </div>
+        </div>
+        <ul class="nav nav-tabs tabs-lg mb-3" role="tablist">
+          <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#paneTasksNew" type="button" role="tab">งานใหม่/รอดำเนินการ <span class="badge text-bg-warning ms-1" id="cntTasksNew">0</span></button></li>
+          <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#paneTasksDone" type="button" role="tab">ดำเนินการเสร็จสิ้นแล้ว <span class="badge text-bg-success ms-1" id="cntTasksDone">0</span></button></li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="paneTasksNew" role="tabpanel">
+            <div class="card"><div class="card-body"><div class="table-responsive">
+              <table id="tblTasksNew" class="table table-hover align-middle w-100 tbl">
+                <thead><tr><th>เลขรับ</th><th>เรื่อง</th><th>คำเกษียน</th><th>กำหนดส่ง</th><th>การอ่าน</th><th>สถานะ</th><th class="text-end no-sort">จัดการ</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div></div></div>
+          </div>
+          <div class="tab-pane fade" id="paneTasksDone" role="tabpanel">
+            <div class="card"><div class="card-body"><div class="table-responsive">
+              <table id="tblTasksDone" class="table table-hover align-middle w-100 tbl">
+                <thead><tr><th>เลขรับ</th><th>เรื่อง</th><th>เสร็จเมื่อ</th><th>ผลการปฏิบัติงาน</th><th class="text-end no-sort">จัดการ</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 5) Outgoing ========== -->
+      <section class="page d-none" id="page-outgoing" data-title="หนังสือส่ง">
+        <div class="page-head">
+          <div>
+            <h2 class="page-title">ทะเบียนหนังสือส่ง</h2>
+            <div class="text-muted small">หนังสือส่งทั่วไปและหนังสือเวียน</div>
+          </div>
+          <div class="d-flex flex-wrap gap-2">
+            <select id="filterOutType" class="form-select w-auto" aria-label="กรองประเภท">
+              <option value="">ทุกประเภท</option>
+              <option>หนังสือส่งทั่วไป</option><option>หนังสือเวียน</option>
+            </select>
+            <button type="button" class="btn btn-primary" data-action="newOutgoing" data-roles="Admin,Saraban,Director,Teacher"><i class="fa-solid fa-plus me-2"></i>จองเลขหนังสือส่ง</button>
+          </div>
+        </div>
+        <div class="card"><div class="card-body"><div class="table-responsive">
+          <table id="tblOutgoing" class="table table-hover align-middle w-100 tbl">
+            <thead><tr><th>เลขที่</th><th>ประเภท</th><th>ลงวันที่</th><th>ถึง</th><th>เรื่อง</th><th>กลุ่มงาน</th><th class="text-end no-sort">ไฟล์</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div></div></div>
+      </section>
+
+      <!-- ========== 6) Orders ========== -->
+      <section class="page d-none" id="page-orders" data-title="คำสั่งและประกาศ">
+        <div class="page-head">
+          <div>
+            <h2 class="page-title">คำสั่งและประกาศ</h2>
+            <div class="text-muted small">ออกเลขที่อัตโนมัติแยกตามปี พ.ศ.</div>
+          </div>
+          <div class="d-flex flex-wrap gap-2">
+            <select id="filterOrderType" class="form-select w-auto" aria-label="กรองประเภท">
+              <option value="">ทั้งหมด</option><option>คำสั่ง</option><option>ประกาศ</option>
+            </select>
+            <button type="button" class="btn btn-primary" data-action="newOrder" data-roles="Admin,Saraban,Director,Teacher"><i class="fa-solid fa-plus me-2"></i>ออกเลขคำสั่ง/ประกาศ</button>
+          </div>
+        </div>
+        <div class="card"><div class="card-body"><div class="table-responsive">
+          <table id="tblOrders" class="table table-hover align-middle w-100 tbl">
+            <thead><tr><th>ประเภท</th><th>เลขที่</th><th>ลงวันที่</th><th>เรื่อง</th><th>มีผลบังคับใช้</th><th>การเผยแพร่</th><th class="text-end no-sort">ไฟล์</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div></div></div>
+      </section>
+
+      <!-- ========== 7) Tracking ========== -->
+      <section class="page d-none" id="page-tracking" data-title="ติดตามงาน">
+        <div class="page-head">
+          <div>
+            <h2 class="page-title">ติดตามงานที่มอบหมาย</h2>
+            <div class="text-muted small">งานที่ยังไม่เปิดอ่านหรือยังไม่เสร็จสิ้น</div>
+          </div>
+          <div class="d-flex flex-wrap gap-2 align-items-center">
+            <select id="filterTrackState" class="form-select w-auto" aria-label="กรองสถานะเวลา">
+              <option value="">ทุกสถานะเวลา</option><option value="normal">ปกติ</option><option value="near">ใกล้ครบกำหนด</option><option value="overdue">เกินกำหนด</option>
+            </select>
+            <div class="form-check form-switch m-0">
+              <input class="form-check-input" type="checkbox" role="switch" id="chkTrackUnread">
+              <label class="form-check-label" for="chkTrackUnread">เฉพาะยังไม่อ่าน</label>
+            </div>
+            <div class="form-check form-switch m-0">
+              <input class="form-check-input" type="checkbox" role="switch" id="chkTrackDone">
+              <label class="form-check-label" for="chkTrackDone">รวมงานที่เสร็จแล้ว</label>
+            </div>
+            <button type="button" class="btn btn-warning" id="btnNudge" data-action="nudgeSelected"><i class="fa-solid fa-bell me-2"></i>ส่งแจ้งเตือนซ้ำ (<span id="nudgeCount">0</span>)</button>
+          </div>
+        </div>
+        <div class="legend mb-2">
+          <span><i class="dot dot-ok"></i> ปกติ</span>
+          <span><i class="dot dot-near"></i> ใกล้ครบกำหนด (≤ 2 วัน)</span>
+          <span><i class="dot dot-over"></i> เกินกำหนด</span>
+          <span><i class="dot dot-done"></i> เสร็จสิ้น</span>
+        </div>
+        <div class="card"><div class="card-body"><div class="table-responsive">
+          <table id="tblTracking" class="table table-hover align-middle w-100 tbl">
+            <thead><tr>
+              <th class="no-sort" style="width:44px"><input type="checkbox" class="form-check-input" id="chkTrackAll" aria-label="เลือกทั้งหมด"></th>
+              <th>เลขรับ</th><th>เรื่อง</th><th>ผู้รับผิดชอบ</th><th>กำหนดส่ง</th><th>การอ่าน</th><th>สถานะงาน</th><th>เวลา</th><th class="text-end no-sort">Timeline</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div></div></div>
+      </section>
+
+      <!-- ========== 8) Reports ========== -->
+      <section class="page d-none" id="page-reports" data-title="ทะเบียนคุม/รายงาน">
+        <div class="page-head no-print">
+          <div>
+            <h2 class="page-title">ทะเบียนคุมหนังสือราชการ</h2>
+            <div class="text-muted small">ค้นหา กรอง พิมพ์ และส่งออกเป็นไฟล์ CSV/Excel</div>
+          </div>
+        </div>
+        <div class="card mb-3 no-print"><div class="card-body">
+          <form id="formReport" class="row g-3 align-items-end">
+            <div class="col-12 col-md-4 col-xl-2">
+              <label class="form-label" for="repType">ประเภททะเบียน</label>
+              <select class="form-select" id="repType" name="type">
+                <option value="incoming">หนังสือรับ</option>
+                <option value="outgoing">หนังสือส่ง</option>
+                <option value="orders">คำสั่ง/ประกาศ</option>
+              </select>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+              <label class="form-label" for="repFrom">ตั้งแต่วันที่</label>
+              <input type="date" class="form-control" id="repFrom" name="date_from">
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+              <label class="form-label" for="repTo">ถึงวันที่</label>
+              <input type="date" class="form-control" id="repTo" name="date_to">
+            </div>
+            <div class="col-12 col-md-4 col-xl-2">
+              <label class="form-label" for="repDepartment">กลุ่มงาน</label>
+              <input type="text" class="form-control" id="repDepartment" name="department" list="deptList" placeholder="ทั้งหมด" autocomplete="off">
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+              <label class="form-label" for="repStatus">สถานะ/ประเภท</label>
+              <select class="form-select" id="repStatus" name="status"><option value="">ทั้งหมด</option></select>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+              <label class="form-label" for="repKeyword">คำค้น</label>
+              <input type="search" class="form-control" id="repKeyword" name="keyword" placeholder="เรื่อง/หน่วยงาน/เลขที่">
+            </div>
+            <div class="col-12 d-flex flex-wrap gap-2">
+              <button type="submit" class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-2"></i>ค้นหา</button>
+              <button type="button" class="btn btn-outline-secondary" data-action="printReport"><i class="fa-solid fa-print me-2"></i>พิมพ์</button>
+              <button type="button" class="btn btn-outline-success" data-action="exportCsv"><i class="fa-solid fa-file-csv me-2"></i>CSV</button>
+              <button type="button" class="btn btn-outline-success" data-action="exportXls"><i class="fa-solid fa-file-excel me-2"></i>Excel</button>
+            </div>
+          </form>
+        </div></div>
+
+        <div id="reportPrintArea" class="print-area doc-font">
+          <div class="print-head text-center">
+            <div class="print-org" id="prtOrg">-</div>
+            <div class="print-title" id="prtTitle">ทะเบียนหนังสือรับ</div>
+            <div class="print-period" id="prtPeriod"></div>
+          </div>
+          <div class="table-responsive">
+            <table id="tblReport" class="table table-bordered report-table"><thead></thead><tbody></tbody></table>
+          </div>
+          <div class="print-foot d-flex justify-content-between small text-muted">
+            <span id="prtCount">0 รายการ</span>
+            <span id="prtPrinted"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 9a) Users ========== -->
+      <section class="page d-none" id="page-users" data-title="จัดการผู้ใช้งาน">
+        <div class="page-head">
+          <div>
+            <h2 class="page-title">จัดการผู้ใช้งาน</h2>
+            <div class="text-muted small">เพิ่ม แก้ไข ระงับสิทธิ์ และจัดการลายเซ็นอิเล็กทรอนิกส์</div>
+          </div>
+          <button type="button" class="btn btn-primary" data-action="newUser"><i class="fa-solid fa-user-plus me-2"></i>เพิ่มผู้ใช้</button>
+        </div>
+        <div class="card"><div class="card-body"><div class="table-responsive">
+          <table id="tblUsers" class="table table-hover align-middle w-100 tbl">
+            <thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อ-สกุล</th><th>ตำแหน่ง</th><th>กลุ่มงาน</th><th>บทบาท</th><th>ลายเซ็น</th><th>สถานะ</th><th class="text-end no-sort">จัดการ</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div></div></div>
+      </section>
+
+      <!-- ========== 9b) Settings ========== -->
+      <section class="page d-none" id="page-settings" data-title="ตั้งค่าระบบ">
+        <div class="page-head">
+          <div>
+            <h2 class="page-title">ตั้งค่าระบบ</h2>
+            <div class="text-muted small">ข้อมูลหน่วยงาน เลขรัน ตราประทับ และการแจ้งเตือน</div>
+          </div>
+          <button type="submit" form="formSettings" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>บันทึกการตั้งค่า</button>
+        </div>
+
+        <form id="formSettings" class="row g-3" autocomplete="off">
+          <div class="col-12 col-xl-6">
+            <div class="card h-100"><div class="card-header"><i class="fa-solid fa-school me-2"></i>ข้อมูลหน่วยงาน</div><div class="card-body">
+              <div class="mb-3"><label class="form-label">ชื่อหน่วยงาน</label><input class="form-control" data-setting="org_name" maxlength="200"></div>
+              <div class="mb-3"><label class="form-label">รหัสหนังสือประจำหน่วยงาน</label><input class="form-control" data-setting="doc_code" placeholder="ศธ 04xxx/" maxlength="50"></div>
+              <div><label class="form-label">Root Folder ID (Google Drive)</label><input class="form-control" data-setting="root_folder_id" placeholder="เว้นว่างเพื่อให้ระบบสร้างให้อัตโนมัติ" maxlength="100"><div class="form-text">ภายในจะสร้างโฟลเดอร์ ปี พ.ศ. / ประเภทหนังสือ ให้อัตโนมัติ</div></div>
+            </div></div>
+          </div>
+
+          <div class="col-12 col-xl-6">
+            <div class="card h-100"><div class="card-header"><i class="fa-solid fa-stamp me-2"></i>ตราประทับบน PDF</div><div class="card-body">
+              <div class="mb-3"><label class="form-label">ข้อความหัวตราประทับ</label><input class="form-control" data-setting="stamp_text_in" maxlength="50"></div>
+              <div class="row g-3">
+                <div class="col-6"><label class="form-label">ตำแหน่งเริ่มต้น</label>
+                  <select class="form-select" data-setting="stamp_position">
+                    <option value="top-right">มุมขวาบน</option><option value="top-left">มุมซ้ายบน</option>
+                    <option value="bottom-right">มุมขวาล่าง</option><option value="bottom-left">มุมซ้ายล่าง</option>
+                  </select></div>
+                <div class="col-6"><label class="form-label">สีตราประทับ</label>
+                  <select class="form-select" data-setting="stamp_color"><option value="blue">น้ำเงิน</option><option value="red">แดง</option></select></div>
+              </div>
+              <div class="mt-3"><label class="form-label">ข้อความสำเร็จรูปคำเกษียน (1 บรรทัดต่อ 1 ข้อความ)</label>
+                <textarea class="form-control" rows="5" data-setting="endorse_templates"></textarea></div>
+            </div></div>
+          </div>
+
+          <div class="col-12 col-xl-6">
+            <div class="card h-100"><div class="card-header"><i class="fa-solid fa-hashtag me-2"></i>รูปแบบเลขรัน</div><div class="card-body">
+              <div class="row g-3">
+                <div class="col-12 col-md-6"><label class="form-label">เลขทะเบียนรับ</label><input class="form-control" data-setting="incoming_reg_format"></div>
+                <div class="col-12 col-md-6"><label class="form-label">หนังสือส่งทั่วไป</label><input class="form-control" data-setting="outgoing_reg_format"></div>
+                <div class="col-12 col-md-6"><label class="form-label">หนังสือเวียน (กรณีแยกชุด)</label><input class="form-control" data-setting="circular_reg_format"></div>
+                <div class="col-12 col-md-6"><label class="form-label">คำสั่ง</label><input class="form-control" data-setting="order_format"></div>
+                <div class="col-12 col-md-6"><label class="form-label">ประกาศ</label><input class="form-control" data-setting="announce_format"></div>
+                <div class="col-12 col-md-6"><label class="form-label">เลขหนังสือเวียน</label>
+                  <select class="form-select" data-setting="out_circular_shared"><option value="TRUE">ใช้เลขชุดเดียวกับหนังสือส่งทั่วไป</option><option value="FALSE">แยกเลขเป็นอีกชุดหนึ่ง</option></select></div>
+              </div>
+              <div class="form-text mt-3">ตัวแปรที่ใช้ได้: <code>{n}</code> เลขลำดับ, <code>{n:3}</code> เติมศูนย์ให้ครบ 3 หลัก, <code>{yyyy}</code> ปี พ.ศ. 4 หลัก, <code>{yy}</code> ปี พ.ศ. 2 หลัก, <code>{code}</code> รหัสหนังสือ</div>
+            </div></div>
+          </div>
+
+          <div class="col-12 col-xl-6">
+            <div class="card h-100"><div class="card-header"><i class="fa-solid fa-bell me-2"></i>การแจ้งเตือน</div><div class="card-body">
+              <div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" role="switch" id="setTgOn" data-setting="telegram_enabled" data-bool="1"><label class="form-check-label" for="setTgOn">เปิดใช้งาน Telegram Bot</label></div>
+              <div class="mb-3"><label class="form-label">Telegram Bot Token</label>
+                <div class="input-group"><input type="password" class="form-control" id="setTgToken" data-setting="telegram_bot_token" autocomplete="new-password" placeholder="123456:ABC-DEF...">
+                <button class="btn btn-outline-secondary" type="button" data-action="togglePassword" data-target="setTgToken" aria-label="แสดง/ซ่อน"><i class="fa-solid fa-eye"></i></button></div>
+                <div class="form-text">ผู้ใช้แต่ละคนต้องกรอก Telegram Chat ID ในหน้าจัดการผู้ใช้ และกด Start กับบอทก่อน</div></div>
+              <div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" role="switch" id="setMailOn" data-setting="email_enabled" data-bool="1"><label class="form-check-label" for="setMailOn">เปิดใช้งานอีเมล (โควตาประมาณ 100 ฉบับ/วัน)</label></div>
+              <button type="button" class="btn btn-outline-primary" data-action="testNotify"><i class="fa-solid fa-paper-plane me-2"></i>ทดสอบส่งแจ้งเตือนถึงฉัน</button>
+              <div class="form-text mt-1">กดบันทึกการตั้งค่าก่อนทดสอบ</div>
+            </div></div>
+          </div>
+        </form>
+
+        <div class="card mt-3">
+          <div class="card-header"><i class="fa-solid fa-arrow-rotate-left me-2"></i>เลขรันและการรีเซ็ตเมื่อขึ้นปี พ.ศ. ใหม่</div>
+          <div class="card-body">
+            <p class="text-muted small mb-3">ระบบเริ่มนับเลข 1 ใหม่อัตโนมัติเมื่อขึ้นปี พ.ศ. ใหม่ ส่วนฟอร์มนี้ใช้กำหนดเลขล่าสุดเอง เช่น เมื่อมีหนังสือที่ลงทะเบียนด้วยมือมาก่อน เลขถัดไปจะเท่ากับค่าที่กรอก + 1</p>
+            <div class="row g-4">
+              <div class="col-12 col-lg-6">
+                <div class="table-responsive"><table class="table table-sm align-middle" id="tblCounters">
+                  <thead><tr><th>ตัวนับ</th><th class="text-end">เลขล่าสุด</th></tr></thead><tbody></tbody></table></div>
+              </div>
+              <div class="col-12 col-lg-6">
+                <form id="formResetRun" class="row g-3 align-items-end">
+                  <div class="col-12 col-md-6"><label class="form-label">ประเภทเลขรัน</label>
+                    <select class="form-select" name="type" required>
+                      <option value="incoming">หนังสือรับ</option><option value="outgoing_general">หนังสือส่งทั่วไป</option>
+                      <option value="outgoing_circular">หนังสือเวียน (แยกชุด)</option><option value="order">คำสั่ง</option><option value="announce">ประกาศ</option>
+                    </select></div>
+                  <div class="col-6 col-md-3"><label class="form-label">ปี พ.ศ.</label><input type="number" class="form-control" name="year" min="2500" max="2700" required></div>
+                  <div class="col-6 col-md-3"><label class="form-label">เลขล่าสุด</label><input type="number" class="form-control" name="value" min="0" max="999999" value="0" required></div>
+                  <div class="col-12"><button type="submit" class="btn btn-outline-danger"><i class="fa-solid fa-pen me-2"></i>กำหนดเลขรัน</button></div>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div><!-- /content -->
+    <footer class="app-foot no-print">e-Saraban &middot; ระบบงานสารบรรณอิเล็กทรอนิกส์ &middot; <span id="footOrg"></span></footer>
+  </div><!-- /main -->
+</div><!-- /appView -->
+
+<datalist id="deptList"></datalist>
+
+<!-- ======================= Modals ======================= -->
+
+<!-- PDF Viewer (ใช้ร่วมทุกหน้า) -->
+<div class="modal fade" id="modalPdf" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered modal-fullscreen-lg-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-regular fa-file-pdf text-danger me-2"></i><span id="pdfTitle">เอกสาร</span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body p-0"><iframe id="pdfFrame" class="pdf-frame" title="ตัวอย่างเอกสาร"></iframe></div>
+      <div class="modal-footer">
+        <a id="btnPdfOpen" class="btn btn-outline-secondary" target="_blank" rel="noopener"><i class="fa-solid fa-up-right-from-square me-2"></i>เปิดในแท็บใหม่</a>
+        <a id="btnPdfDownload" class="btn btn-primary" download><i class="fa-solid fa-download me-2"></i>ดาวน์โหลด</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Incoming -->
+<div class="modal fade" id="modalIncoming" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-inbox me-2"></i>ลงรับหนังสือใหม่</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body">
+        <form id="formIncoming" novalidate>
+          <div class="row g-3">
+            <div class="col-12 col-md-6"><label class="form-label">เลขที่หนังสือ <span class="text-danger">*</span></label><input class="form-control" name="doc_no" maxlength="100" placeholder="เช่น ศธ 04123/456" required></div>
+            <div class="col-12 col-md-6"><label class="form-label">ลงวันที่ <span class="text-danger">*</span></label><input type="date" class="form-control" name="doc_date" required></div>
+            <div class="col-12"><label class="form-label">จากหน่วยงาน <span class="text-danger">*</span></label><input class="form-control" name="from_org" maxlength="200" required></div>
+            <div class="col-12"><label class="form-label">เรื่อง <span class="text-danger">*</span></label><textarea class="form-control" name="subject" rows="2" maxlength="500" required></textarea></div>
+            <div class="col-6"><label class="form-label">ชั้นความเร็ว</label>
+              <select class="form-select" name="urgency"><option>ปกติ</option><option>ด่วน</option><option>ด่วนมาก</option><option>ด่วนที่สุด</option></select></div>
+            <div class="col-6"><label class="form-label">ชั้นความลับ</label>
+              <select class="form-select" name="secrecy"><option>ปกติ</option><option>ลับ</option><option>ลับมาก</option><option>ลับที่สุด</option></select></div>
+            <div class="col-12"><label class="form-label">ไฟล์ PDF หนังสือ <span class="text-danger">*</span></label>
+              <input type="file" class="form-control" name="file" accept="application/pdf,.pdf" required>
+              <div class="form-text">รองรับเฉพาะ PDF ขนาดไม่เกิน 20 MB (ไฟล์ใหญ่ระบบจะแจ้งให้บีบอัดก่อน)</div></div>
+
+            <div class="col-12"><hr class="my-1"></div>
+            <div class="col-12"><div class="fw-semibold mb-2"><i class="fa-solid fa-stamp me-2"></i>ตำแหน่งและสีของตราประทับเลขรับ (หน้าแรก)</div></div>
+            <div class="col-12 d-flex flex-wrap gap-4 align-items-center">
+              <div class="corner-picker" role="radiogroup" aria-label="ตำแหน่งตราประทับ">
+                <label class="cp tl" title="มุมซ้ายบน"><input type="radio" name="stamp_position" value="top-left"><span><i class="fa-solid fa-stamp"></i></span></label>
+                <label class="cp tr" title="มุมขวาบน"><input type="radio" name="stamp_position" value="top-right" checked><span><i class="fa-solid fa-stamp"></i></span></label>
+                <label class="cp bl" title="มุมซ้ายล่าง"><input type="radio" name="stamp_position" value="bottom-left"><span><i class="fa-solid fa-stamp"></i></span></label>
+                <label class="cp br" title="มุมขวาล่าง"><input type="radio" name="stamp_position" value="bottom-right"><span><i class="fa-solid fa-stamp"></i></span></label>
+                <div class="cp-page"><i class="fa-regular fa-file-lines"></i></div>
+              </div>
+              <div>
+                <div class="form-label mb-2">สีตราประทับ</div>
+                <div class="btn-group" role="group" aria-label="สีตราประทับ">
+                  <input type="radio" class="btn-check" name="stamp_color" id="stColorBlue" value="blue" checked>
+                  <label class="btn btn-outline-primary" for="stColorBlue"><i class="fa-solid fa-circle me-1"></i>น้ำเงิน</label>
+                  <input type="radio" class="btn-check" name="stamp_color" id="stColorRed" value="red">
+                  <label class="btn btn-outline-danger" for="stColorRed"><i class="fa-solid fa-circle me-1"></i>แดง</label>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-12 d-none" id="incProgressWrap">
+              <ol class="step-list" id="incSteps">
+                <li data-step="1">บันทึกข้อมูลและออกเลขรับ</li>
+                <li data-step="2">ประทับตราลงบนไฟล์ PDF</li>
+                <li data-step="3">อัปโหลดไฟล์ที่ประทับตราแล้ว</li>
+              </ol>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">ยกเลิก</button>
+        <button type="submit" form="formIncoming" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>บันทึกและประทับตรา</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Endorse -->
+<div class="modal fade" id="modalEndorse" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+  <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable modal-fullscreen-lg-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title"><i class="fa-solid fa-pen-nib me-2"></i>เกษียนหนังสือ <span class="badge text-bg-primary ms-1" id="endRegNo">-</span></h5>
+          <div class="small text-muted" id="endDocMeta">-</div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-12 col-lg-7">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="fw-semibold">ตัวอย่างหนังสือ</div>
+              <a id="endOpenNew" class="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener"><i class="fa-solid fa-up-right-from-square me-1"></i>เปิดเต็มหน้าจอ</a>
+            </div>
+            <iframe id="endorseFrame" class="pdf-frame rounded border" title="ตัวอย่างหนังสือที่จะเกษียน"></iframe>
+          </div>
+          <div class="col-12 col-lg-5">
+            <form id="formEndorse" novalidate>
+              <input type="hidden" name="doc_id">
+              <div class="mb-3">
+                <label class="form-label">ข้อความสำเร็จรูป</label>
+                <div id="endorseTemplates" class="chip-wrap"></div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="endComment">คำเกษียน <span class="text-danger">*</span></label>
+                <textarea class="form-control" id="endComment" name="comment" rows="3" maxlength="1000" required></textarea>
+              </div>
+              <div class="mb-3">
+                <div class="d-flex justify-content-between align-items-center">
+                  <label class="form-label mb-1">มอบหมายผู้รับผิดชอบ <span class="text-danger">*</span></label>
+                  <span class="badge text-bg-secondary" id="assigneeCount">0 คน</span>
+                </div>
+                <input type="search" class="form-control mb-2" id="assigneeSearch" placeholder="ค้นหาชื่อหรือกลุ่มงาน" autocomplete="off">
+                <div class="pick-list" id="assigneeList"></div>
+              </div>
+              <div class="row g-3">
+                <div class="col-12 col-sm-6"><label class="form-label">กำหนดแล้วเสร็จ <span class="text-danger">*</span></label><input type="date" class="form-control" name="due_date" required></div>
+                <div class="col-6 col-sm-3"><label class="form-label">หน้าที่ประทับ</label>
+                  <select class="form-select" name="page_target"><option value="first">หน้าแรก</option><option value="last">หน้าสุดท้าย</option></select></div>
+                <div class="col-6 col-sm-3"><label class="form-label">ตำแหน่ง</label>
+                  <select class="form-select" name="place"><option value="bottom-left">ซ้ายล่าง</option><option value="bottom-right">ขวาล่าง</option><option value="top-left">ซ้ายบน</option><option value="top-right">ขวาบน</option></select></div>
+              </div>
+              <div class="alert alert-light border mt-3 mb-0 py-2 small" id="endorseSignStatus"><i class="fa-solid fa-signature me-2"></i>กำลังตรวจสอบลายเซ็น...</div>
+            </form>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">ยกเลิก</button>
+        <button type="submit" form="formEndorse" class="btn btn-success"><i class="fa-solid fa-paper-plane me-2"></i>ประทับคำเกษียนและส่งมอบงาน</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Complete task -->
+<div class="modal fade" id="modalComplete" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+  <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-circle-check text-success me-2"></i>รายงานผล/ปิดงาน</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-light border small" id="completeInfo">-</div>
+        <form id="formComplete" novalidate>
+          <input type="hidden" name="task_id">
+          <div class="mb-3"><label class="form-label">ผลการปฏิบัติงาน <span class="text-danger">*</span></label>
+            <textarea class="form-control" name="action_note" rows="4" maxlength="2000" required></textarea></div>
+          <div><label class="form-label">แนบหลักฐานเพิ่มเติม (ถ้ามี)</label>
+            <input type="file" class="form-control" name="file" accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg">
+            <div class="form-text">PDF, PNG หรือ JPG ไม่เกิน 20 MB</div></div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">ยกเลิก</button>
+        <button type="submit" form="formComplete" class="btn btn-success"><i class="fa-solid fa-check me-2"></i>ยืนยันปิดงาน</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Outgoing -->
+<div class="modal fade" id="modalOutgoing" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-paper-plane me-2"></i>จองเลขหนังสือส่ง</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body">
+        <form id="formOutgoing" novalidate>
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-label d-block">ประเภท <span class="text-danger">*</span></label>
+              <div class="btn-group w-100" role="group">
+                <input type="radio" class="btn-check" name="out_type" id="outTypeGen" value="หนังสือส่งทั่วไป" checked>
+                <label class="btn btn-outline-primary" for="outTypeGen">หนังสือส่งทั่วไป</label>
+                <input type="radio" class="btn-check" name="out_type" id="outTypeCir" value="หนังสือเวียน">
+                <label class="btn btn-outline-primary" for="outTypeCir">หนังสือเวียน</label>
+              </div>
+              <div class="form-text" id="outNumberHint"></div>
+            </div>
+            <div class="col-12 col-md-6"><label class="form-label">ลงวันที่ <span class="text-danger">*</span></label><input type="date" class="form-control" name="doc_date" required></div>
+            <div class="col-12 col-md-6"><label class="form-label">กลุ่มงานเจ้าของเรื่อง <span class="text-danger">*</span></label><input class="form-control" name="department" list="deptList" maxlength="100" autocomplete="off" required></div>
+            <div class="col-12"><label class="form-label">ถึง <span class="text-danger">*</span></label><input class="form-control" name="to_org" maxlength="300" required></div>
+            <div class="col-12"><label class="form-label">เรื่อง <span class="text-danger">*</span></label><textarea class="form-control" name="subject" rows="2" maxlength="500" required></textarea></div>
+            <div class="col-12"><label class="form-label">ไฟล์ PDF ฉบับสมบูรณ์ที่ลงนามแล้ว <span class="text-danger">*</span></label>
+              <input type="file" class="form-control" name="file" accept="application/pdf,.pdf" required></div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">ยกเลิก</button>
+        <button type="submit" form="formOutgoing" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>บันทึกและออกเลข</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Orders -->
+<div class="modal fade" id="modalOrder" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-scroll me-2"></i>ออกเลขคำสั่ง/ประกาศ</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body">
+        <form id="formOrder" novalidate>
+          <div class="row g-3">
+            <div class="col-12">
+              <div class="btn-group w-100" role="group">
+                <input type="radio" class="btn-check" name="doc_type" id="ordTypeOrder" value="คำสั่ง" checked>
+                <label class="btn btn-outline-primary" for="ordTypeOrder">คำสั่ง</label>
+                <input type="radio" class="btn-check" name="doc_type" id="ordTypeAnn" value="ประกาศ">
+                <label class="btn btn-outline-primary" for="ordTypeAnn">ประกาศ</label>
+              </div>
+            </div>
+            <div class="col-12 col-md-6"><label class="form-label">ลงวันที่ <span class="text-danger">*</span></label><input type="date" class="form-control" name="doc_date" required></div>
+            <div class="col-12 col-md-6"><label class="form-label">วันที่มีผลบังคับใช้</label><input type="date" class="form-control" name="effective_date"></div>
+            <div class="col-12"><label class="form-label">เรื่อง <span class="text-danger">*</span></label><textarea class="form-control" name="subject" rows="2" maxlength="500" required></textarea></div>
+            <div class="col-12"><label class="form-label">ไฟล์ PDF <span class="text-danger">*</span></label><input type="file" class="form-control" name="file" accept="application/pdf,.pdf" required></div>
+            <div class="col-12">
+              <label class="form-label d-block">สิทธิการมองเห็น</label>
+              <div class="btn-group w-100" role="group">
+                <input type="radio" class="btn-check" name="visibility" id="visAll" value="ทุกคน" checked>
+                <label class="btn btn-outline-secondary" for="visAll"><i class="fa-solid fa-earth-asia me-1"></i>เผยแพร่ครูและบุคลากรทุกคน</label>
+                <input type="radio" class="btn-check" name="visibility" id="visRes" value="เฉพาะผู้เกี่ยวข้อง">
+                <label class="btn btn-outline-secondary" for="visRes"><i class="fa-solid fa-user-lock me-1"></i>เฉพาะผู้เกี่ยวข้อง</label>
+              </div>
+            </div>
+            <div class="col-12 d-none" id="orderAllowedWrap">
+              <div class="d-flex justify-content-between align-items-center">
+                <label class="form-label mb-1">เลือกผู้ที่มีสิทธิ์ดู</label>
+                <span class="badge text-bg-secondary" id="orderAllowedCount">0 คน</span>
+              </div>
+              <input type="search" class="form-control mb-2" id="orderAllowedSearch" placeholder="ค้นหาชื่อหรือกลุ่มงาน" autocomplete="off">
+              <div class="pick-list" id="orderAllowedList"></div>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">ยกเลิก</button>
+        <button type="submit" form="formOrder" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>บันทึกและออกเลข</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Timeline -->
+<div class="modal fade" id="modalTimeline" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-route me-2"></i>ประวัติการดำเนินการ</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body">
+        <div id="tlDoc" class="mb-3"></div>
+        <div id="tlEndorse" class="mb-3"></div>
+        <h6 class="fw-semibold">ผู้รับผิดชอบ</h6>
+        <div class="table-responsive mb-3">
+          <table class="table table-sm table-bordered align-middle mb-0" id="tlTasks">
+            <thead><tr><th>ชื่อ</th><th>การอ่าน</th><th>สถานะงาน</th><th>เวลา</th></tr></thead><tbody></tbody>
+          </table>
+        </div>
+        <h6 class="fw-semibold">ไทม์ไลน์</h6>
+        <ul class="timeline" id="tlLogs"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- User -->
+<div class="modal fade" id="modalUser" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-user-gear me-2"></i><span id="userModalTitle">เพิ่มผู้ใช้</span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body">
+        <form id="formUser" novalidate autocomplete="off">
+          <input type="hidden" name="user_id">
+          <div class="row g-3">
+            <div class="col-12 col-md-6"><label class="form-label">ชื่อผู้ใช้ <span class="text-danger">*</span></label><input class="form-control" name="username" maxlength="50" autocapitalize="none" required></div>
+            <div class="col-12 col-md-6"><label class="form-label" id="userPwdLabel">รหัสผ่าน <span class="text-danger">*</span></label>
+              <div class="input-group"><input type="password" class="form-control" id="userPassword" name="password" autocomplete="new-password" placeholder="อย่างน้อย 8 ตัวอักษร">
+              <button class="btn btn-outline-secondary" type="button" data-action="togglePassword" data-target="userPassword" aria-label="แสดง/ซ่อน"><i class="fa-solid fa-eye"></i></button></div>
+              <div class="form-text d-none" id="userPwdHint">เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่าน</div></div>
+            <div class="col-12 col-md-6"><label class="form-label">ชื่อ-สกุล <span class="text-danger">*</span></label><input class="form-control" name="full_name" maxlength="150" required></div>
+            <div class="col-12 col-md-6"><label class="form-label">ตำแหน่ง</label><input class="form-control" name="position" maxlength="100"></div>
+            <div class="col-12 col-md-6"><label class="form-label">กลุ่มงาน</label><input class="form-control" name="department" list="deptList" maxlength="100"></div>
+            <div class="col-6 col-md-3"><label class="form-label">บทบาท</label>
+              <select class="form-select" name="role"><option value="Teacher">ครู/บุคลากร</option><option value="Saraban">เจ้าหน้าที่สารบรรณ</option><option value="Director">ผู้บริหาร</option><option value="Admin">Admin</option></select></div>
+            <div class="col-6 col-md-3"><label class="form-label">สถานะ</label>
+              <select class="form-select" name="status"><option>ใช้งาน</option><option>ระงับ</option></select></div>
+            <div class="col-12 col-md-6"><label class="form-label">อีเมล</label><input type="email" class="form-control" name="email" maxlength="150"></div>
+            <div class="col-12 col-md-6"><label class="form-label">Telegram Chat ID</label><input class="form-control" name="telegram_chat_id" inputmode="numeric" maxlength="30"></div>
+            <div class="col-12">
+              <label class="form-label">ลายเซ็นอิเล็กทรอนิกส์ (PNG พื้นหลังโปร่งใส ไม่เกิน 1 MB)</label>
+              <input type="file" class="form-control" id="userSignature" accept="image/png,.png">
+              <div class="form-text" id="userSigStatus"></div>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">ยกเลิก</button>
+        <button type="submit" form="formUser" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>บันทึก</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Profile / Signature -->
+<div class="modal fade" id="modalProfile" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-signature me-2"></i>ลายเซ็นของฉัน</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body">
+        <div class="text-center mb-3">
+          <div class="sig-preview" id="sigPreview"><span class="text-muted small">ยังไม่มีลายเซ็น</span></div>
+        </div>
+        <form id="formSignature" novalidate>
+          <label class="form-label">อัปโหลดลายเซ็นใหม่ (PNG พื้นหลังโปร่งใส ไม่เกิน 1 MB)</label>
+          <input type="file" class="form-control" name="file" accept="image/png,.png" required>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">ปิด</button>
+        <button type="submit" form="formSignature" class="btn btn-primary"><i class="fa-solid fa-upload me-2"></i>อัปโหลด</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Change password -->
+<div class="modal fade" id="modalPassword" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-key me-2"></i>เปลี่ยนรหัสผ่าน</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ปิด"></button>
+      </div>
+      <div class="modal-body">
+        <form id="formPassword" novalidate autocomplete="off">
+          <div class="mb-3"><label class="form-label">รหัสผ่านเดิม</label><input type="password" class="form-control" name="old_password" autocomplete="current-password" required></div>
+          <div class="mb-3"><label class="form-label">รหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร)</label><input type="password" class="form-control" name="new_password" autocomplete="new-password" minlength="8" required></div>
+          <div class="mb-1"><label class="form-label">ยืนยันรหัสผ่านใหม่</label><input type="password" class="form-control" name="confirm_password" autocomplete="new-password" minlength="8" required></div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">ยกเลิก</button>
+        <button type="submit" form="formPassword" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>บันทึก</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Libraries (CDN) ======================= -->
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/2.0.8/js/dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/2.0.8/js/dataTables.bootstrap5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+
+<?!= include('JS') ?>
+</body>
+</html>

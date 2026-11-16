@@ -1,0 +1,1140 @@
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+ * CONFIG
+ * ===================================================================== */
+const CFG = {
+  MAX_BYTES: 20 * 1024 * 1024,
+  SIG_MAX_BYTES: 1024 * 1024,
+  STORE_KEY: 'esaraban.session',
+  ORG_KEY: 'esaraban.org',
+  PAGE_KEY: 'esaraban.page',
+  FONT_URLS: {
+    regular: [
+      'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/sarabun/Sarabun-Regular.ttf',
+      'https://raw.githubusercontent.com/google/fonts/main/ofl/sarabun/Sarabun-Regular.ttf'
+    ],
+    bold: [
+      'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/sarabun/Sarabun-Bold.ttf',
+      'https://raw.githubusercontent.com/google/fonts/main/ofl/sarabun/Sarabun-Bold.ttf'
+    ]
+  },
+  PDFJS: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js',
+  PDFJS_WORKER: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'
+};
+
+const State = {
+  token: '', expires: 0, remember: false, user: null, settings: null, page: '',
+  directory: null, tables: {}, charts: {}, rows: {}, trackSel: new Set(),
+  fonts: null, loadingCount: 0, lockedModal: null, viewerUrl: null,
+  endorse: null, endorsePicker: null, orderPicker: null, report: null
+};
+
+const ROLE_LABEL = { Admin: 'ผู้ดูแลระบบ', Saraban: 'เจ้าหน้าที่สารบรรณ', Director: 'ผู้บริหาร', Teacher: 'ครู/บุคลากร' };
+const ROW_KEY = { incoming: 'doc_id', endorse: 'doc_id', tasks: 'task_id', users: 'user_id', tracking: 'task_id' };
+const TH_M = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+const TH_ML = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+/* =====================================================================
+ * Utilities
+ * ===================================================================== */
+const qs = (s, r) => (r || document).querySelector(s);
+const qsa = (s, r) => Array.from((r || document).querySelectorAll(s));
+const byId = id => document.getElementById(id);
+const on = (id, evt, fn) => { const el = byId(id); if (el) el.addEventListener(evt, fn); };
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const strip = h => String(h).replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+
+function thDate(iso) { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${+m[3]} ${TH_M[+m[2] - 1]} ${+m[1] + 543}` : ''; }
+function thDateLong(iso) { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${+m[3]} ${TH_ML[+m[2] - 1]} ${+m[1] + 543}` : ''; }
+function thDateTime(s) { const m = String(s || '').match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/); return m ? `${thDate(m[1])} ${m[2]} น.` : thDate(s); }
+function todayISO() { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
+function addDays(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+
+const chip = (text, color) => `<span class="chip chip-${color}">${esc(text)}</span>`;
+const URG_COLOR = { 'ปกติ': 'gray', 'ด่วน': 'amber', 'ด่วนมาก': 'orange', 'ด่วนที่สุด': 'red' };
+const ST_COLOR = { 'รอเกษียน': 'amber', 'เกษียนแล้ว': 'blue', 'กำลังดำเนินการ': 'purple', 'เสร็จสิ้น': 'green', 'รอดำเนินการ': 'amber', 'ลงทะเบียนแล้ว': 'blue', 'ใช้งาน': 'green', 'ระงับ': 'red' };
+const DUE = { normal: ['ปกติ', 'green'], near: ['ใกล้ครบกำหนด', 'amber'], overdue: ['เกินกำหนด', 'red'], done: ['เสร็จสิ้น', 'gray'] };
+const urgChip = r => chip(r.urgency || 'ปกติ', URG_COLOR[r.urgency] || 'gray');
+const stChip = s => chip(s, ST_COLOR[s] || 'gray');
+const dueChip = s => DUE[s] ? chip(DUE[s][0], DUE[s][1]) : '';
+const readChip = r => chip(r.read_status, r.read_status === 'อ่านแล้ว' ? 'green' : 'red') + (r.read_at ? `<div class="small text-muted">${esc(thDateTime(r.read_at))}</div>` : '');
+
+function safeStore() { const a = []; try { a.push(window.localStorage); } catch (e) { /* blocked */ } try { a.push(window.sessionStorage); } catch (e) { /* blocked */ } return a; }
+const store = {
+  get() { for (const s of safeStore()) { try { const v = s.getItem(CFG.STORE_KEY); if (v) return JSON.parse(v); } catch (e) { /* ignore */ } } return null; },
+  save() {
+    this.clear();
+    const s = safeStore(); const target = State.remember ? s[0] : (s[1] || s[0]);
+    try { if (target) target.setItem(CFG.STORE_KEY, JSON.stringify({ token: State.token, expires: State.expires, remember: State.remember, user: State.user })); } catch (e) { /* ignore */ }
+  },
+  clear() { safeStore().forEach(s => { try { s.removeItem(CFG.STORE_KEY); } catch (e) { /* ignore */ } }); }
+};
+function sget(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+function sset(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* ignore */ } }
+
+/* =====================================================================
+ * API wrapper (google.script.run -> Promise)
+ * ===================================================================== */
+function callApi(action, payload) {
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res && res.ok) return resolve(res.data);
+        const err = new Error((res && res.error) || 'เกิดข้อผิดพลาด');
+        err.code = res && res.code;
+        if (err.code === 'UNAUTHORIZED') handleSessionExpired();
+        reject(err);
+      })
+      .withFailureHandler(e => reject(new Error((e && e.message) || 'ไม่สามารถติดต่อเซิร์ฟเวอร์ได้')))
+      .api(State.token || '', action, payload || {});
+  });
+}
+async function api(action, payload, opt) {
+  const o = opt || {};
+  if (o.loading) showLoading(o.loading);
+  try { return await callApi(action, payload); } finally { if (o.loading) hideLoading(); }
+}
+async function withLoading(text, fn) { showLoading(text); try { return await fn(); } finally { hideLoading(); } }
+function showLoading(t) { State.loadingCount++; byId('loadingText').textContent = t || 'กำลังประมวลผล...'; byId('loadingOverlay').classList.remove('d-none'); }
+function setLoadingText(t) { byId('loadingText').textContent = t; }
+function hideLoading() { State.loadingCount = Math.max(0, State.loadingCount - 1); if (!State.loadingCount) byId('loadingOverlay').classList.add('d-none'); }
+
+/* ---------- SweetAlert2 ---------- */
+const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 2800, timerProgressBar: true });
+const swalOk = (title, html) => Swal.fire({ icon: 'success', title, html, confirmButtonText: 'ตกลง' });
+const swalErr = (msg, title) => Swal.fire({ icon: 'error', title: title || 'เกิดข้อผิดพลาด', text: msg, confirmButtonText: 'ตกลง' });
+const swalAsk = async (title, html, confirmText, icon) => (await Swal.fire({ title, html, icon: icon || 'question', showCancelButton: true, confirmButtonText: confirmText || 'ยืนยัน', cancelButtonText: 'ยกเลิก', reverseButtons: true })).isConfirmed;
+function fail(e) { if (e && e.code === 'UNAUTHORIZED') return; console.error(e); return swalErr((e && e.message) || String(e)); }
+
+/* ---------- Modal helpers ---------- */
+function modalShow(id) {
+  return new Promise(resolve => {
+    const el = byId(id), m = bootstrap.Modal.getOrCreateInstance(el);
+    if (el.classList.contains('show')) return resolve(m);
+    el.addEventListener('shown.bs.modal', () => resolve(m), { once: true });
+    m.show();
+  });
+}
+function modalHide(id) { const m = bootstrap.Modal.getInstance(byId(id)); if (m) m.hide(); }
+function lockModal(id, flag) {
+  State.lockedModal = flag ? id : null;
+  qsa('#' + id + ' [data-bs-dismiss]').forEach(b => { b.disabled = flag; });
+}
+['modalIncoming', 'modalEndorse'].forEach(id => byId(id).addEventListener('hide.bs.modal', e => { if (State.lockedModal === id) e.preventDefault(); }));
+
+/* ---------- Forms ---------- */
+function validate(form) { if (form.checkValidity()) return true; form.classList.add('was-validated'); form.reportValidity(); return false; }
+function resetForm(form) { form.reset(); form.classList.remove('was-validated'); }
+function submit(formId, handler) {
+  on(formId, 'submit', async e => {
+    e.preventDefault();
+    const form = e.target;
+    if (!validate(form)) return;
+    try { await handler(form, Object.fromEntries(new FormData(form).entries())); } catch (ex) { fail(ex); }
+  });
+}
+
+/* ---------- Files ---------- */
+function sniff(b) {
+  if (b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'pdf';
+  if (b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'png';
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
+  return null;
+}
+async function readUpload(file, kinds, max) {
+  if (!file) throw new Error('กรุณาเลือกไฟล์');
+  const limit = max || CFG.MAX_BYTES;
+  if (file.size > limit) throw new Error('ไฟล์ใหญ่เกิน ' + Math.round(limit / 1048576) + ' MB กรุณาบีบอัดไฟล์ก่อนอัปโหลด (เช่น ใช้เครื่องมือบีบอัด PDF ออนไลน์)');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const type = sniff(bytes);
+  if (!type || kinds.indexOf(type) < 0) throw new Error('ชนิดไฟล์ไม่ถูกต้อง (รองรับเฉพาะ ' + kinds.join(', ').toUpperCase() + ')');
+  return { bytes, type };
+}
+function b64ToBytes(b64) { const bin = atob(b64), n = bin.length, u = new Uint8Array(n); for (let i = 0; i < n; i++) u[i] = bin.charCodeAt(i); return u; }
+function bytesToBase64(bytes) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1] || '');
+    r.onerror = () => rej(new Error('แปลงไฟล์ไม่สำเร็จ'));
+    r.readAsDataURL(new Blob([bytes]));
+  });
+}
+function downloadBytes(bytes, name, mime) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime || 'application/octet-stream' }));
+  const a = document.createElement('a'); a.href = url; a.download = name || 'file'; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+function loadScript(src) {
+  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('โหลดสคริปต์ไม่สำเร็จ')); document.head.appendChild(s); });
+}
+
+/* =====================================================================
+ * PDF viewer (pdf.js แสดงบน canvas — ใช้ได้ใน sandbox ของ GAS และบน iPad/iPhone)
+ * ===================================================================== */
+let pdfjsReady = null;
+function ensurePdfJs() {
+  if (!pdfjsReady) {
+    pdfjsReady = loadScript(CFG.PDFJS).then(() => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = CFG.PDFJS_WORKER; }).catch(e => { pdfjsReady = null; throw e; });
+  }
+  return pdfjsReady;
+}
+function clearPdf(box) { box._tok = null; if (box._doc) { try { box._doc.destroy(); } catch (e) { /* ignore */ } box._doc = null; } box.innerHTML = ''; }
+async function renderPdf(box, bytes) {
+  clearPdf(box);
+  const tok = box._tok = {};
+  box.innerHTML = '<div class="text-center text-white-50 py-5"><div class="spinner-border"></div><div class="mt-2">กำลังแสดงเอกสาร...</div></div>';
+  try {
+    await ensurePdfJs();
+    const doc = await window.pdfjsLib.getDocument({ data: bytes.slice() }).promise;   // slice: pdf.js จะ detach buffer เดิม
+    if (box._tok !== tok) { doc.destroy(); return; }
+    box._doc = doc; box.innerHTML = '';
+    const width = Math.max(300, (box.clientWidth || 700) - 16);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const io = new IntersectionObserver(entries => entries.forEach(en => {
+      if (!en.isIntersecting) return;
+      io.unobserve(en.target); drawPage(en.target);
+    }), { root: box, rootMargin: '800px 0px' });
+    const drawPage = async holder => {
+      if (box._tok !== tok) return;
+      const vp = holder._page.getViewport({ scale: holder._scale * dpr });
+      const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height; c.style.cssText = 'width:100%;height:100%;display:block';
+      await holder._page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      if (box._tok === tok) holder.appendChild(c);
+    };
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      if (box._tok !== tok) return;
+      const v1 = page.getViewport({ scale: 1 });
+      const holder = document.createElement('div');
+      holder.className = 'pdf-page';
+      holder.style.cssText = `width:100%;max-width:${width}px;aspect-ratio:${v1.width}/${v1.height}`;
+      holder._page = page; holder._scale = width / v1.width;
+      box.appendChild(holder); io.observe(holder);
+    }
+  } catch (e) {
+    console.error(e);
+    if (box._tok === tok) box.innerHTML = '<div class="text-center text-white py-5 px-3">ไม่สามารถแสดงตัวอย่างได้ กรุณากดปุ่มดาวน์โหลดเพื่อเปิดไฟล์</div>';
+  }
+}
+function revokeViewer() { if (State.viewerUrl) { URL.revokeObjectURL(State.viewerUrl); State.viewerUrl = null; } }
+async function showFile(f, title) {
+  const bytes = b64ToBytes(f.base64);
+  revokeViewer();
+  State.viewerUrl = URL.createObjectURL(new Blob([bytes], { type: f.mime || 'application/pdf' }));
+  byId('pdfTitle').textContent = title || f.name || 'เอกสาร';
+  byId('btnPdfOpen').href = State.viewerUrl;
+  const dl = byId('btnPdfDownload'); dl.href = State.viewerUrl; dl.setAttribute('download', f.name || 'document.pdf');
+  await modalShow('modalPdf');
+  const box = byId('pdfFrame');
+  if ((f.mime || '').indexOf('image/') === 0) {
+    clearPdf(box); const img = new Image(); img.src = State.viewerUrl; img.className = 'pdf-img'; box.appendChild(img);
+  } else await renderPdf(box, bytes);
+}
+async function openPdf(spec, title) { const f = await api('file.get', spec, { loading: 'กำลังเปิดไฟล์...' }); return showFile(f, title); }
+byId('modalPdf').addEventListener('hidden.bs.modal', () => { clearPdf(byId('pdfFrame')); revokeViewer(); });
+
+/* =====================================================================
+ * PDF stamping (pdf-lib + fontkit + Sarabun)
+ * ===================================================================== */
+async function loadFonts() {
+  if (State.fonts) return State.fonts;
+  const get = async urls => {
+    let last;
+    for (const u of urls) {
+      try {
+        const r = await fetch(u); if (!r.ok) throw new Error('HTTP ' + r.status);
+        const buf = new Uint8Array(await r.arrayBuffer());
+        if (buf.length < 20000) throw new Error('ไฟล์ฟอนต์ไม่สมบูรณ์');
+        return buf;
+      } catch (e) { last = e; }
+    }
+    throw new Error('โหลดฟอนต์ Sarabun ไม่สำเร็จ (' + (last && last.message) + ') กรุณาตรวจสอบอินเทอร์เน็ตหรือการบล็อกเว็บไซต์');
+  };
+  const [regular, bold] = await Promise.all([get(CFG.FONT_URLS.regular), get(CFG.FONT_URLS.bold)]);
+  State.fonts = { regular, bold };
+  return State.fonts;
+}
+async function newPdf(bytes) {
+  let pdf;
+  try { pdf = await PDFLib.PDFDocument.load(bytes); }
+  catch (e) { throw new Error('ไม่สามารถอ่านไฟล์ PDF ได้ (ไฟล์อาจเสียหายหรือมีรหัสผ่านป้องกัน) กรุณาสแกนหรือบันทึกเป็น PDF ใหม่'); }
+  pdf.registerFontkit(fontkit);
+  const f = await loadFonts();
+  const regular = await pdf.embedFont(f.regular), bold = await pdf.embedFont(f.bold);
+  return { pdf, regular, bold };
+}
+
+/** วาดตามพิกัดที่ "มองเห็น" (ซ้ายล่าง = 0,0) และแปลงให้ถูกต้องเมื่อหน้ามี /Rotate */
+function pageCanvas(page) {
+  const { degrees } = PDFLib;
+  const mb = page.getMediaBox(), a = ((page.getRotation().angle % 360) + 360) % 360;
+  const W = mb.width, H = mb.height, swap = a === 90 || a === 270;
+  const map = (x, y) => {
+    if (a === 90) return { x: mb.x + W - y, y: mb.y + x };
+    if (a === 180) return { x: mb.x + W - x, y: mb.y + H - y };
+    if (a === 270) return { x: mb.x + y, y: mb.y + H - x };
+    return { x: mb.x + x, y: mb.y + y };
+  };
+  const rot = degrees(a);
+  return {
+    vw: swap ? H : W, vh: swap ? W : H,
+    rect: (x, y, w, h, o) => page.drawRectangle(Object.assign({}, map(x, y), { width: w, height: h, rotate: rot }, o)),
+    text: (t, x, y, o) => page.drawText(t, Object.assign({}, map(x, y), { rotate: rot }, o)),
+    image: (img, x, y, w, h) => page.drawImage(img, Object.assign({}, map(x, y), { width: w, height: h, rotate: rot }))
+  };
+}
+
+const CLUSTER = /[\u0E40-\u0E44]?\S[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]*[\u0E30\u0E32\u0E33\u0E2F\u0E46]?[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]*|\s+/gu;
+const clean = s => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u200B]/g, '');
+function wrapText(font, text, size, maxW) {
+  const lines = [];
+  clean(text).split(/\r?\n/).forEach(par => {
+    let cur = '';
+    (par.match(CLUSTER) || []).forEach(c => {
+      const t = cur + c;
+      if (cur && font.widthOfTextAtSize(t.trimEnd(), size) > maxW) { lines.push(cur.trimEnd()); cur = c.trimStart(); } else cur = t;
+    });
+    lines.push(cur.trimEnd());
+  });
+  return lines;
+}
+function fitSize(font, text, maxW, size, min) { let s = size; while (s > min && font.widthOfTextAtSize(text, s) > maxW) s -= 0.5; return s; }
+function ellipsize(font, text, size, maxW) {
+  if (font.widthOfTextAtSize(text, size) <= maxW) return text;
+  let out = '';
+  for (const c of (text.match(CLUSTER) || [])) { if (font.widthOfTextAtSize(out + c + '...', size) > maxW) break; out += c; }
+  return out + '...';
+}
+
+/** ตราประทับเลขรับ (หน้าแรก) info: {reg_no, date, time, org, text, position, color} */
+async function stampIncoming(srcBytes, info) {
+  const { rgb } = PDFLib;
+  const { pdf, regular, bold } = await newPdf(srcBytes);
+  const page = pdf.getPage(0), cv = pageCanvas(page);
+  const color = info.color === 'red' ? rgb(0.78, 0.05, 0.05) : rgb(0.05, 0.2, 0.72);
+  const boxW = Math.min(190, cv.vw * 0.5), pad = 7, inner = boxW - pad * 2, lh = 1.45;
+  const org = clean(info.org), s1 = fitSize(bold, org, inner, 10.5, 7.5);
+  const l2 = `${clean(info.text || 'ทะเบียนรับ')} เลขที่ ${clean(info.reg_no)}`, s2 = fitSize(bold, l2, inner, 13, 8);
+  const rows = [
+    { t: ellipsize(bold, org, s1, inner), f: bold, s: s1 },
+    { t: ellipsize(bold, l2, s2, inner), f: bold, s: s2 },
+    { t: `วันที่ ${thDateLong(info.date)}`, f: regular, s: 11 },
+    { t: `เวลา ${clean(info.time)} น.`, f: regular, s: 11 }
+  ];
+  const boxH = pad * 2 + rows.reduce((a, r) => a + r.s * lh, 0), m = 20;
+  const pos = info.position || 'top-right';
+  const x = /right$/.test(pos) ? cv.vw - boxW - m : m;
+  const y = /^top/.test(pos) ? cv.vh - boxH - m : m;
+  cv.rect(x, y, boxW, boxH, { color: rgb(1, 1, 1), opacity: 0.9, borderColor: color, borderWidth: 1.4 });
+  cv.rect(x + 2.5, y + 2.5, boxW - 5, boxH - 5, { borderColor: color, borderWidth: 0.5 });
+  let cursor = y + boxH - pad;
+  rows.forEach(r => {
+    const w = r.f.widthOfTextAtSize(r.t, r.s);
+    cv.text(r.t, x + (boxW - w) / 2, cursor - r.s, { font: r.f, size: r.s, color });
+    cursor -= r.s * lh;
+  });
+  return pdf.save();
+}
+
+/** ตราประทับคำเกษียน o: {comment, assignees[], due, name, position, sigBytes, pageTarget, place} */
+async function stampEndorse(srcBytes, o) {
+  const { rgb } = PDFLib;
+  const { pdf, regular, bold } = await newPdf(srcBytes);
+  const pages = pdf.getPages(), page = o.pageTarget === 'last' ? pages[pages.length - 1] : pages[0];
+  const cv = pageCanvas(page);
+  let sig = null;
+  if (o.sigBytes) { try { sig = await pdf.embedPng(o.sigBytes); } catch (e) { throw new Error('ไฟล์ลายเซ็นไม่ถูกต้อง (ต้องเป็น PNG) กรุณาอัปโหลดลายเซ็นใหม่'); } }
+  // ขนาดตราเกษียนให้กะทัดรัด ไม่บดบังเนื้อหาในเอกสารต้นฉบับ
+  const ink = rgb(0.05, 0.1, 0.35), pad = 7, m = 20, lh = 1.4;
+  const boxW = Math.min(240, cv.vw * 0.52), inner = boxW - pad * 2;
+
+  const build = sc => {
+    const L = [];
+    const text = (t, f, s, align) => wrapText(f, t, s, inner).forEach(line => L.push({ k: 't', t: line, f, s, align }));
+    text(o.comment, regular, 9.5 * sc, 'l');
+    if (o.assignees && o.assignees.length) {
+      const names = o.assignees.length > 6 ? o.assignees.slice(0, 5).join(', ') + ` และอีก ${o.assignees.length - 5} คน` : o.assignees.join(', ');
+      const lines = wrapText(regular, 'มอบ ' + names, 8.2 * sc, inner);
+      const cut = lines.slice(0, 4);
+      if (lines.length > 4) cut[3] = ellipsize(regular, cut[3], 8.2 * sc, inner);
+      cut.forEach(t => L.push({ k: 't', t, f: regular, s: 8.2 * sc, align: 'l' }));
+    }
+    L.push({ k: 't', t: `กำหนดแล้วเสร็จ ${thDateLong(o.due)}`, f: regular, s: 8.2 * sc, align: 'l' });
+    L.push({ k: 'gap', h: 4 * sc });
+    if (sig) {
+      const d = sig.scale(1), r = Math.min(110 * sc / d.width, 38 * sc / d.height, 1);
+      L.push({ k: 'img', w: d.width * r, h: d.height * r });
+    } else L.push({ k: 'gap', h: 22 * sc });
+    const nm = ellipsize(bold, `(${clean(o.name)})`, 9.5 * sc, inner);
+    L.push({ k: 't', t: nm, f: bold, s: 9.5 * sc, align: 'c' });
+    if (o.position) L.push({ k: 't', t: ellipsize(regular, clean(o.position), 8.5 * sc, inner), f: regular, s: 8.5 * sc, align: 'c' });
+    L.push({ k: 't', t: thDateLong(todayISO()), f: regular, s: 8.5 * sc, align: 'c' });
+    const h = pad * 2 + L.reduce((a, i) => a + (i.k === 't' ? i.s * lh : i.h), 0);
+    return { L, h };
+  };
+  let lay = build(1);
+  for (let sc = 0.85; lay.h > cv.vh * 0.5 && sc >= 0.55; sc -= 0.15) lay = build(sc);
+
+  const place = o.place || 'bottom-left';
+  const x = /right$/.test(place) ? cv.vw - boxW - m : m;
+  const y = /^top/.test(place) ? cv.vh - lay.h - m : m;
+  cv.rect(x, y, boxW, lay.h, { color: rgb(1, 1, 1), opacity: 0.92, borderColor: ink, borderWidth: 1 });
+  let cursor = y + lay.h - pad;
+  lay.L.forEach(i => {
+    if (i.k === 'gap') { cursor -= i.h; return; }
+    if (i.k === 'img') { cv.image(sig, x + (boxW - i.w) / 2, cursor - i.h, i.w, i.h); cursor -= i.h; return; }
+    const w = i.f.widthOfTextAtSize(i.t, i.s);
+    cv.text(i.t, i.align === 'c' ? x + (boxW - w) / 2 : x + pad, cursor - i.s, { font: i.f, size: i.s, color: ink });
+    cursor -= i.s * lh;
+  });
+  return pdf.save();
+}
+
+/* =====================================================================
+ * DataTables helpers
+ * ===================================================================== */
+const DT_LANG = {
+  search: 'ค้นหา:', lengthMenu: 'แสดง _MENU_ รายการ', info: 'แสดง _START_ ถึง _END_ จาก _TOTAL_ รายการ',
+  infoEmpty: 'ไม่มีข้อมูล', infoFiltered: '(กรองจาก _MAX_ รายการ)', zeroRecords: 'ไม่พบข้อมูลที่ตรงกับคำค้น',
+  emptyTable: 'ยังไม่มีข้อมูล', paginate: { first: '«', previous: '‹', next: '›', last: '»' }
+};
+const col = (html, text, cls) => ({ data: null, className: cls || '', render: (d, type, row) => type === 'display' ? html(row) : (text ? text(row) : strip(html(row))) });
+const actCol = html => ({ data: null, orderable: false, searchable: false, className: 'text-end text-nowrap', render: (d, type, row) => type === 'display' ? html(row) : '' });
+function fill(id, rows, columns, opts) {
+  if (!State.tables[id]) {
+    State.tables[id] = jQuery('#' + id).DataTable(Object.assign({ data: [], columns, language: DT_LANG, pageLength: 15, lengthMenu: [10, 15, 25, 50, 100], autoWidth: false, order: [] }, opts || {}));
+  }
+  const t = State.tables[id];
+  t.clear().rows.add(rows).draw();
+  return t;
+}
+function colFilter(id, idx, val) { const t = State.tables[id]; if (t) t.column(idx).search(val ? '^' + val + '$' : '', true, false).draw(); }
+const tbtn = (action, icon, label, cls, attrs) => `<button type="button" class="btn btn-sm btn-${cls || 'outline-primary'} btn-tbl" data-action="${action}" ${attrs || ''} title="${esc(label)}" aria-label="${esc(label)}"><i class="fa-solid ${icon}"></i><span class="d-none d-xxl-inline ms-1">${esc(label)}</span></button>`;
+const findRow = (name, id) => (State.rows[name] || []).find(r => r[ROW_KEY[name]] === id);
+const rowClass = { createdRow: (tr, d) => { if (d.due_state) tr.classList.add('row-' + d.due_state); } };
+
+/* ---------- Picker (เลือกหลายคน จัดกลุ่มตามกลุ่มงาน) ---------- */
+function buildPicker(cfg) {
+  const listEl = byId(cfg.list), searchEl = byId(cfg.search), countEl = byId(cfg.count);
+  const groups = {};
+  cfg.users.forEach(u => { const g = u.department || 'ไม่ระบุกลุ่มงาน'; (groups[g] = groups[g] || []).push(u); });
+  listEl.innerHTML = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'th')).map((g, gi) =>
+    `<div class="pick-group" data-gi="${gi}"><span>${esc(g)}</span><button type="button" data-toggle-group="${gi}">เลือกทั้งกลุ่ม</button></div>` +
+    groups[g].map(u => `<label class="pick-item" data-gi="${gi}" data-q="${esc((u.full_name + ' ' + g + ' ' + (u.position || '')).toLowerCase())}"><input type="checkbox" class="form-check-input" value="${esc(u.user_id)}"><span>${esc(u.full_name)}<small>${esc(u.position || '')}</small></span></label>`).join('')
+  ).join('');
+  const update = () => { countEl.textContent = listEl.querySelectorAll('input:checked').length + ' คน'; };
+  listEl.onchange = update;
+  listEl.onclick = e => {
+    const b = e.target.closest('[data-toggle-group]'); if (!b) return;
+    const items = qsa(`.pick-item[data-gi="${b.dataset.toggleGroup}"]:not(.hidden) input`, listEl);
+    const all = items.every(i => i.checked); items.forEach(i => { i.checked = !all; }); update();
+  };
+  searchEl.value = '';
+  searchEl.oninput = () => {
+    const q = searchEl.value.trim().toLowerCase();
+    qsa('.pick-item', listEl).forEach(it => it.classList.toggle('hidden', !!q && it.dataset.q.indexOf(q) < 0));
+    qsa('.pick-group', listEl).forEach(g => g.classList.toggle('hidden', !listEl.querySelector(`.pick-item[data-gi="${g.dataset.gi}"]:not(.hidden)`)));
+  };
+  update();
+  return () => qsa('input:checked', listEl).map(i => i.value);
+}
+async function loadDirectory(force) {
+  if (State.directory && !force) return State.directory;
+  State.directory = await api('users.directory');
+  const depts = Array.from(new Set(State.directory.map(u => u.department).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'th'));
+  byId('deptList').innerHTML = depts.map(d => `<option value="${esc(d)}"></option>`).join('');
+  return State.directory;
+}
+
+/* =====================================================================
+ * Session / Auth
+ * ===================================================================== */
+function clearSession() { store.clear(); State.token = ''; State.expires = 0; }
+function handleSessionExpired() {
+  if (!State.token) return;
+  clearSession(); showLogin();
+  Swal.fire({ icon: 'info', title: 'เซสชันหมดอายุ', text: 'กรุณาเข้าสู่ระบบอีกครั้ง', confirmButtonText: 'ตกลง' });
+}
+function showLogin() {
+  qsa('.modal.show').forEach(m => { const i = bootstrap.Modal.getInstance(m); if (i) i.hide(); });
+  Object.values(State.charts).forEach(c => c.destroy()); State.charts = {};
+  Object.values(State.tables).forEach(t => t.clear().draw());
+  State.rows = {}; State.directory = null; State.user = null; State.trackSel.clear(); State.report = null;
+  document.body.classList.add('is-login'); document.body.classList.remove('sb-open');
+  byId('appView').classList.add('d-none'); byId('loginView').classList.remove('d-none');
+}
+function startSession(d) {
+  State.token = d.token; State.expires = d.expires; State.user = d.user; State.settings = d.settings;
+  store.save(); enterApp();
+}
+function applyOrg() {
+  const n = (State.settings && State.settings.org_name) || 'e-Saraban';
+  byId('sbOrgName').textContent = n; byId('footOrg').textContent = n; byId('loginOrgName').textContent = n;
+  try { localStorage.setItem(CFG.ORG_KEY, n); } catch (e) { /* ignore */ }
+}
+function applyUser() {
+  const u = State.user, ch = (u.full_name || '?').trim().charAt(0);
+  ['sbAvatar', 'topAvatar'].forEach(id => { byId(id).textContent = ch; });
+  byId('sbUserName').textContent = u.full_name; byId('topUserName').textContent = u.full_name;
+  byId('sbUserRole').textContent = ROLE_LABEL[u.role] || u.role;
+  byId('topUserInfo').textContent = `${u.full_name} · ${ROLE_LABEL[u.role] || u.role}`;
+  qs('#cardOverdue').closest('.stat-card').dataset.go = u.role === 'Teacher' ? 'tasks' : 'tracking';
+}
+function applyRoles() {
+  qsa('[data-roles]').forEach(el => {
+    const ok = el.dataset.roles.split(',').indexOf(State.user.role) >= 0;
+    (el.classList.contains('stat-card') ? el.parentElement : el).classList.toggle('d-none', !ok);
+  });
+}
+function canAccess(page) {
+  const a = qs(`.sb-link[data-page="${page}"]`);
+  return !!a && a.dataset.roles.split(',').indexOf(State.user.role) >= 0;
+}
+function enterApp() {
+  document.body.classList.remove('is-login');
+  byId('loginView').classList.add('d-none'); byId('appView').classList.remove('d-none');
+  applyOrg(); applyUser(); applyRoles();
+  if (State.user.role !== 'Teacher') loadDirectory().catch(() => {});
+  const want = sget(CFG.PAGE_KEY);
+  navigate(want && canAccess(want) ? want : 'dashboard');
+}
+
+on('formLogin', 'submit', async e => {
+  e.preventDefault();
+  const f = e.target, err = byId('loginError'), btn = byId('btnLogin');
+  err.classList.add('d-none');
+  if (!f.checkValidity()) { f.reportValidity(); return; }
+  btn.disabled = true;
+  try {
+    State.remember = f.remember.checked;
+    const d = await api('auth.login', { username: f.username.value, password: f.password.value, remember: f.remember.checked }, { loading: 'กำลังเข้าสู่ระบบ...' });
+    f.password.value = '';
+    startSession(d);
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('d-none'); }
+  finally { btn.disabled = false; }
+});
+
+submit('formPassword', async (form, fd) => {
+  if (fd.new_password !== fd.confirm_password) throw new Error('รหัสผ่านใหม่และการยืนยันไม่ตรงกัน');
+  await api('auth.changePassword', { old_password: fd.old_password, new_password: fd.new_password }, { loading: 'กำลังบันทึก...' });
+  modalHide('modalPassword'); resetForm(form);
+  swalOk('เปลี่ยนรหัสผ่านสำเร็จ');
+});
+
+/* =====================================================================
+ * Router
+ * ===================================================================== */
+const PAGES = {
+  dashboard: () => loadDashboard(), incoming: () => loadIncoming(), endorse: () => loadEndorse(), tasks: () => loadTasks(),
+  outgoing: () => loadOutgoing(), orders: () => loadOrders(), tracking: () => loadTracking(), reports: () => initReports(),
+  users: () => loadUsers(), settings: () => loadSettings()
+};
+async function loadPage(page) { try { await (PAGES[page] || (() => {}))(); } catch (e) { fail(e); } }
+function navigate(page) {
+  if (!canAccess(page)) page = 'dashboard';
+  State.page = page; sset(CFG.PAGE_KEY, page);
+  qsa('.page').forEach(p => p.classList.add('d-none'));
+  const sec = byId('page-' + page);
+  sec.classList.remove('d-none', 'fade-in'); void sec.offsetWidth; sec.classList.add('fade-in');
+  qsa('.sb-link').forEach(a => a.classList.toggle('active', a.dataset.page === page));
+  byId('pageTitle').textContent = sec.dataset.title || '';
+  document.body.classList.remove('sb-open');
+  window.scrollTo(0, 0);
+  return loadPage(page);
+}
+
+/* =====================================================================
+ * 1) Dashboard
+ * ===================================================================== */
+function setBadges(c) {
+  const b1 = byId('badgeEndorse'), b2 = byId('badgeTasks');
+  b1.textContent = c.pendingEndorse; b1.classList.toggle('d-none', !c.pendingEndorse);
+  b2.textContent = c.myTasks; b2.classList.toggle('d-none', !c.myTasks);
+}
+async function refreshBadges() { try { setBadges((await api('dashboard.stats')).cards); } catch (e) { /* silent */ } }
+async function loadDashboard() {
+  const d = await api('dashboard.stats'), c = d.cards;
+  byId('cardIncomingToday').textContent = c.incomingToday; byId('cardPendingEndorse').textContent = c.pendingEndorse;
+  byId('cardMyTasks').textContent = c.myTasks; byId('cardOverdue').textContent = c.overdue;
+  setBadges(c);
+  byId('chartYear').textContent = 'ปี ' + d.chart.year;
+  if (State.charts.monthly) State.charts.monthly.destroy();
+  State.charts.monthly = new Chart(byId('chartMonthly'), {
+    type: 'bar',
+    data: { labels: d.chart.labels, datasets: [
+      { label: 'หนังสือรับ', data: d.chart.incoming, backgroundColor: '#3b5bdb', borderRadius: 4 },
+      { label: 'หนังสือส่ง', data: d.chart.outgoing, backgroundColor: '#10b981', borderRadius: 4 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+  byId('urgentList').innerHTML = d.urgent.length ? d.urgent.map(r => `
+    <a href="#" class="urgent-item" data-action="viewFile" data-kind="incoming" data-id="${esc(r.doc_id)}" data-title="เลขรับ ${esc(r.reg_no)}">
+      <div class="d-flex justify-content-between align-items-center mb-1"><strong>${esc(r.reg_no)}</strong>${urgChip(r)}</div>
+      <div class="urgent-subject">${esc(r.subject)}</div>
+      <div class="small text-muted mt-1">${esc(r.from_org)} · ${stChip(r.status)}</div>
+    </a>`).join('') : '<div class="empty-state">ไม่มีหนังสือด่วนที่ค้างอยู่</div>';
+}
+
+/* =====================================================================
+ * 2) Incoming
+ * ===================================================================== */
+const canRegister = () => State.user && (State.user.role === 'Admin' || State.user.role === 'Saraban');
+async function loadIncoming() {
+  const rows = State.rows.incoming = await api('incoming.list');
+  fill('tblIncoming', rows, [
+    col(r => `<strong>${esc(r.reg_no)}</strong>`),
+    col(r => `${esc(thDate(r.received_date))}<div class="small text-muted">${esc(r.received_time)} น.</div>`, r => r.received_date + ' ' + r.received_time),
+    col(r => esc(r.doc_no)),
+    col(r => esc(r.from_org), null, 'wrap'),
+    col(r => esc(r.subject), null, 'wrap'),
+    col(r => urgChip(r) + (r.secrecy && r.secrecy !== 'ปกติ' ? ' ' + chip(r.secrecy, 'red') : ''), r => r.urgency),
+    col(r => stChip(r.status), r => r.status),
+    actCol(r => tbtn('viewFile', 'fa-file-pdf', 'ดูไฟล์', 'outline-primary', `data-kind="incoming" data-id="${esc(r.doc_id)}" data-title="เลขรับ ${esc(r.reg_no)}"`) + ' ' +
+      tbtn('timeline', 'fa-route', 'ประวัติ', 'outline-secondary', `data-id="${esc(r.doc_id)}"`) +
+      (canRegister() && !r.has_stamped && r.status === 'รอเกษียน' ? ' ' + tbtn('restamp', 'fa-stamp', 'ประทับตราใหม่', 'outline-warning', `data-id="${esc(r.doc_id)}"`) : ''))
+  ]);
+  colFilter('tblIncoming', 6, byId('filterIncomingStatus').value);
+}
+on('filterIncomingStatus', 'change', e => colFilter('tblIncoming', 6, e.target.value));
+
+/** ขั้นที่ 2-3: ประทับตรา แล้วอัปโหลดไฟล์ที่ประทับตราแล้ว (ลองซ้ำได้) */
+function setStep(n, state) { const li = qs(`#incSteps li[data-step="${n}"]`); if (li) li.className = state || ''; }
+async function finishIncoming(ctx) {
+  let step = 2; const c = ctx.created;
+  try {
+    if (!ctx.stampedB64) {
+      setStep(2, 'active');
+      const out = await stampIncoming(ctx.bytes, { reg_no: c.reg_no, date: c.received_date, time: c.received_time, org: State.settings.org_name, text: State.settings.stamp_text_in, position: ctx.pos, color: ctx.color });
+      if (Math.ceil(out.length / 3) * 4 > CFG.MAX_BYTES * 1.37) throw new Error('ไฟล์หลังประทับตรามีขนาดใหญ่เกิน 20 MB กรุณาบีบอัดไฟล์ต้นฉบับ');
+      ctx.stampedB64 = await bytesToBase64(out);
+      setStep(2, 'done');
+    }
+    step = 3; setStep(3, 'active');
+    await api('incoming.saveStamped', { doc_id: c.doc_id, file: ctx.stampedB64 });
+    setStep(3, 'done');
+  } catch (e) { setStep(step, 'error'); throw e; }
+}
+
+function newIncoming() {
+  const form = byId('formIncoming'); resetForm(form);
+  form.elements.stamp_position.value = State.settings.stamp_position || 'top-right';
+  form.elements.stamp_color.value = State.settings.stamp_color || 'blue';
+  byId('incProgressWrap').classList.add('d-none'); qsa('#incSteps li').forEach(li => { li.className = ''; });
+  qs('button[form="formIncoming"]').disabled = false;
+  modalShow('modalIncoming');
+}
+on('formIncoming', 'submit', async e => {
+  e.preventDefault();
+  const form = e.target; if (!validate(form)) return;
+  const fd = Object.fromEntries(new FormData(form).entries());
+  const btn = qs('button[form="formIncoming"]');
+  let up;
+  try {
+    up = await readUpload(form.elements.file.files[0], ['pdf']);
+    await withLoading('กำลังตรวจสอบไฟล์และเตรียมฟอนต์...', () => newPdf(up.bytes));     // ตรวจก่อนออกเลข
+  } catch (ex) { return swalErr(ex.message); }
+
+  lockModal('modalIncoming', true); btn.disabled = true;
+  byId('incProgressWrap').classList.remove('d-none'); qsa('#incSteps li').forEach(li => { li.className = ''; });
+  let ctx;
+  try {
+    setStep(1, 'active');
+    const b64 = await bytesToBase64(up.bytes);
+    const created = await api('incoming.create', { doc_no: fd.doc_no, doc_date: fd.doc_date, from_org: fd.from_org, subject: fd.subject, urgency: fd.urgency, secrecy: fd.secrecy, file: b64 });
+    setStep(1, 'done');
+    ctx = { bytes: up.bytes, created, pos: fd.stamp_position, color: fd.stamp_color };
+  } catch (ex) { setStep(1, 'error'); lockModal('modalIncoming', false); btn.disabled = false; return fail(ex); }
+
+  let stamped = false;
+  for (;;) {
+    try { await finishIncoming(ctx); stamped = true; break; }
+    catch (ex) {
+      const r = await Swal.fire({ icon: 'warning', title: 'ประทับตราไม่สำเร็จ', html: `หนังสือถูกลงรับแล้ว เลขรับ <b>${esc(ctx.created.reg_no)}</b><br><span class="text-muted">${esc(ex.message)}</span>`, showCancelButton: true, confirmButtonText: 'ลองอีกครั้ง', cancelButtonText: 'ไว้ภายหลัง' });
+      if (!r.isConfirmed) break;
+    }
+  }
+  lockModal('modalIncoming', false); btn.disabled = false; modalHide('modalIncoming');
+  loadIncoming().catch(() => {}); refreshBadges();
+  if (stamped) swalOk('ลงรับหนังสือสำเร็จ', `เลขรับ <b>${esc(ctx.created.reg_no)}</b><br>ประทับตราและบันทึกลง Google Drive แล้ว`);
+  else Swal.fire({ icon: 'info', title: 'ลงรับแล้ว แต่ยังไม่ได้ประทับตรา', html: `เลขรับ <b>${esc(ctx.created.reg_no)}</b><br>กดปุ่ม "ประทับตราใหม่" ในตารางหนังสือรับเพื่อทำซ้ำ`, confirmButtonText: 'ตกลง' });
+});
+
+async function restamp(el) {
+  const row = findRow('incoming', el.dataset.id); if (!row) return;
+  if (!await swalAsk('ประทับตราใหม่', `ประทับตราเลขรับ <b>${esc(row.reg_no)}</b> ลงบนไฟล์ต้นฉบับอีกครั้ง?`, 'ประทับตรา')) return;
+  await withLoading('กำลังประทับตราลงบนไฟล์ PDF...', async () => {
+    const f = await api('file.get', { kind: 'incoming', id: row.doc_id, variant: 'original' });
+    const ctx = { bytes: b64ToBytes(f.base64), created: { doc_id: row.doc_id, reg_no: row.reg_no, received_date: row.received_date, received_time: row.received_time }, pos: State.settings.stamp_position, color: State.settings.stamp_color };
+    await finishIncoming(ctx);
+  });
+  Toast.fire({ icon: 'success', title: 'ประทับตราเรียบร้อย' });
+  loadIncoming();
+}
+
+/* =====================================================================
+ * 3) Endorse
+ * ===================================================================== */
+async function loadEndorse() {
+  const rows = State.rows.endorse = await api('endorse.pending');
+  fill('tblEndorse', rows, [
+    col(r => `<strong>${esc(r.reg_no)}</strong>`),
+    col(r => `${esc(thDate(r.received_date))}<div class="small text-muted">${esc(r.received_time)} น.</div>`, r => r.received_date + ' ' + r.received_time),
+    col(r => esc(r.from_org), null, 'wrap'),
+    col(r => esc(r.subject), null, 'wrap'),
+    col(r => urgChip(r), r => r.urgency),
+    actCol(r => tbtn('viewFile', 'fa-file-pdf', 'ดูไฟล์', 'outline-secondary', `data-kind="incoming" data-id="${esc(r.doc_id)}" data-variant="stamped" data-title="เลขรับ ${esc(r.reg_no)}"`) + ' ' +
+      tbtn('openEndorse', 'fa-pen-nib', 'เกษียน', 'primary', `data-id="${esc(r.doc_id)}"`))
+  ]);
+  setBadges({ pendingEndorse: rows.length, myTasks: +byId('badgeTasks').textContent || 0 });
+}
+
+async function openEndorse(el) {
+  const id = el.dataset.id, row = findRow('endorse', id); if (!row) return;
+  const form = byId('formEndorse'); resetForm(form);
+  form.elements.doc_id.value = id;
+  form.elements.due_date.min = todayISO(); form.elements.due_date.value = addDays(todayISO(), 7);
+  byId('endRegNo').textContent = row.reg_no; byId('endDocMeta').textContent = `${row.from_org} · ${row.subject}`;
+  byId('endorseTemplates').innerHTML = (State.settings.endorse_templates || []).map(t => `<button type="button" class="chip-btn" data-action="useTemplate" data-text="${esc(t)}">${esc(t)}</button>`).join('') || '<span class="text-muted small">ยังไม่ได้ตั้งค่าข้อความสำเร็จรูป</span>';
+  byId('endorseSignStatus').className = 'alert alert-light border mt-3 mb-0 py-2 small';
+  byId('endorseSignStatus').innerHTML = '<i class="fa-solid fa-signature me-2"></i>กำลังตรวจสอบลายเซ็น...';
+  State.endorse = { doc_id: id, bytes: null, sig: null, url: null };
+  const dir = await withLoading('กำลังโหลดรายชื่อ...', () => loadDirectory());
+  State.endorsePicker = buildPicker({ list: 'assigneeList', search: 'assigneeSearch', count: 'assigneeCount', users: dir });
+  await modalShow('modalEndorse');
+  const box = byId('endorseFrame');
+  box.innerHTML = '<div class="text-center text-white-50 py-5"><div class="spinner-border"></div></div>';
+  try {
+    const [f, sig] = await Promise.all([api('file.get', { kind: 'incoming', id, variant: 'stamped' }), api('users.mySignature').catch(() => null)]);
+    if (!State.endorse || State.endorse.doc_id !== id) return;
+    State.endorse.bytes = b64ToBytes(f.base64);
+    State.endorse.url = URL.createObjectURL(new Blob([State.endorse.bytes], { type: 'application/pdf' }));
+    byId('endOpenNew').href = State.endorse.url;
+    const st = byId('endorseSignStatus');
+    if (sig) {
+      State.endorse.sig = b64ToBytes(sig.base64);
+      st.className = 'alert alert-success mt-3 mb-0 py-2 small';
+      st.innerHTML = `<i class="fa-solid fa-circle-check me-2"></i>พบลายเซ็นของท่าน จะประทับพร้อมคำเกษียน <img src="data:image/png;base64,${sig.base64}" alt="ลายเซ็น" style="height:34px;margin-left:.5rem;vertical-align:middle">`;
+    } else {
+      st.className = 'alert alert-warning mt-3 mb-0 py-2 small';
+      st.innerHTML = '<i class="fa-solid fa-triangle-exclamation me-2"></i>ยังไม่มีลายเซ็น กรุณาอัปโหลดที่เมนูผู้ใช้ &gt; ลายเซ็นของฉัน';
+    }
+    await renderPdf(box, State.endorse.bytes);
+  } catch (ex) { box.innerHTML = ''; fail(ex); }
+}
+byId('modalEndorse').addEventListener('hidden.bs.modal', () => {
+  clearPdf(byId('endorseFrame'));
+  if (State.endorse && State.endorse.url) URL.revokeObjectURL(State.endorse.url);
+  State.endorse = null;
+});
+
+submit('formEndorse', async (form, fd) => {
+  const st = State.endorse;
+  if (!st || !st.bytes) throw new Error('ยังโหลดไฟล์หนังสือไม่เสร็จ กรุณารอสักครู่');
+  const comment = String(fd.comment || '').trim(); if (!comment) throw new Error('กรุณากรอกคำเกษียน');
+  const ids = State.endorsePicker(); if (!ids.length) throw new Error('กรุณาเลือกผู้รับผิดชอบอย่างน้อย 1 คน');
+  if (fd.due_date < todayISO()) throw new Error('กำหนดแล้วเสร็จต้องไม่น้อยกว่าวันนี้');
+  if (!st.sig && !await swalAsk('ยังไม่มีลายเซ็น', 'ต้องการประทับคำเกษียนโดยไม่มีภาพลายเซ็นหรือไม่?', 'ประทับโดยไม่มีลายเซ็น', 'warning')) return;
+  const dir = State.directory || [];
+  const names = ids.map(i => (dir.find(u => u.user_id === i) || {}).full_name).filter(Boolean);
+  lockModal('modalEndorse', true);
+  try {
+    const res = await withLoading('กำลังประทับคำเกษียนลงบนไฟล์ PDF...', async () => {
+      const out = await stampEndorse(st.bytes, { comment, assignees: names, due: fd.due_date, name: State.user.full_name, position: State.user.position, sigBytes: st.sig, pageTarget: fd.page_target, place: fd.place });
+      const b64 = await bytesToBase64(out);
+      setLoadingText('กำลังบันทึกและแจ้งเตือนผู้รับผิดชอบ...');
+      return api('endorse.submit', { doc_id: st.doc_id, comment, assigned_to: ids, due_date: fd.due_date, file: b64 });
+    });
+    lockModal('modalEndorse', false); modalHide('modalEndorse');
+    swalOk('เกษียนหนังสือสำเร็จ', res.notified ? `ส่งแจ้งเตือนแล้ว ${res.notified} ช่องทาง` : 'บันทึกแล้ว แต่ยังไม่ได้ส่งแจ้งเตือน (ยังไม่ได้เปิดช่องทางแจ้งเตือน หรือผู้รับยังไม่มี Chat ID/อีเมล)');
+    loadEndorse(); refreshBadges();
+  } catch (ex) { lockModal('modalEndorse', false); throw ex; }
+});
+
+/* =====================================================================
+ * 4) Tasks
+ * ===================================================================== */
+async function loadTasks() {
+  const rows = State.rows.tasks = await api('tasks.my');
+  const nw = rows.filter(r => r.task_status !== 'เสร็จสิ้น'), done = rows.filter(r => r.task_status === 'เสร็จสิ้น');
+  byId('cntTasksNew').textContent = nw.length; byId('cntTasksDone').textContent = done.length;
+  fill('tblTasksNew', nw, [
+    col(r => `<strong>${esc(r.reg_no)}</strong>`),
+    col(r => `${urgChip(r)}<div class="mt-1">${esc(r.subject)}</div>`, r => r.subject, 'wrap'),
+    col(r => esc(r.comment), null, 'wrap'),
+    col(r => `${esc(thDate(r.due_date))}<div>${dueChip(r.due_state)}</div>`, r => r.due_date || ''),
+    col(r => readChip(r), r => r.read_status),
+    col(r => stChip(r.task_status), r => r.task_status),
+    actCol(r => tbtn('openTask', 'fa-book-open', 'เปิดอ่าน', 'primary', `data-id="${esc(r.task_id)}"`) + ' ' +
+      tbtn('downloadFile', 'fa-download', 'ดาวน์โหลด', 'outline-secondary', `data-kind="incoming" data-id="${esc(r.doc_id)}"`) + ' ' +
+      tbtn('completeTask', 'fa-circle-check', 'ปิดงาน', 'success', `data-id="${esc(r.task_id)}"`))
+  ], rowClass);
+  fill('tblTasksDone', done, [
+    col(r => `<strong>${esc(r.reg_no)}</strong>`),
+    col(r => esc(r.subject), null, 'wrap'),
+    col(r => esc(thDateTime(r.completed_at)), r => r.completed_at || ''),
+    col(r => esc(r.action_note), null, 'wrap'),
+    actCol(r => tbtn('viewFile', 'fa-file-pdf', 'ดูเอกสาร', 'outline-primary', `data-kind="incoming" data-id="${esc(r.doc_id)}" data-title="เลขรับ ${esc(r.reg_no)}"`) +
+      (r.has_evidence ? ' ' + tbtn('viewFile', 'fa-paperclip', 'หลักฐาน', 'outline-secondary', `data-kind="evidence" data-id="${esc(r.task_id)}" data-title="หลักฐาน เลขรับ ${esc(r.reg_no)}"`) : ''))
+  ]);
+  setBadges({ pendingEndorse: +byId('badgeEndorse').textContent || 0, myTasks: nw.length });
+}
+async function openTask(el) {
+  const f = await api('tasks.open', { task_id: el.dataset.id }, { loading: 'กำลังเปิดเอกสาร...' });
+  const row = findRow('tasks', el.dataset.id);
+  await showFile(f, row ? 'เลขรับ ' + row.reg_no : f.name);
+  loadTasks().catch(() => {});                       // อัปเดตสถานะ "อ่านแล้ว"
+}
+function completeTask(el) {
+  const row = findRow('tasks', el.dataset.id); if (!row) return;
+  const form = byId('formComplete'); resetForm(form);
+  form.elements.task_id.value = row.task_id;
+  byId('completeInfo').innerHTML = `<strong>${esc(row.reg_no)}</strong> — ${esc(row.subject)}<div class="text-muted mt-1">คำเกษียน: ${esc(row.comment)}</div>`;
+  modalShow('modalComplete');
+}
+submit('formComplete', async (form, fd) => {
+  const note = String(fd.action_note || '').trim(); if (!note) throw new Error('กรุณากรอกผลการปฏิบัติงาน');
+  const payload = { task_id: fd.task_id, action_note: note };
+  const file = form.elements.file.files[0];
+  if (file) payload.file = await bytesToBase64((await readUpload(file, ['pdf', 'png', 'jpg'])).bytes);
+  await api('tasks.complete', payload, { loading: 'กำลังบันทึกผลการปฏิบัติงาน...' });
+  modalHide('modalComplete');
+  swalOk('ปิดงานเรียบร้อย', 'ระบบแจ้งผู้บริหารแล้ว');
+  loadTasks(); refreshBadges();
+});
+
+/* =====================================================================
+ * 5) Outgoing
+ * ===================================================================== */
+async function loadOutgoing() {
+  const rows = State.rows.outgoing = await api('outgoing.list');
+  fill('tblOutgoing', rows, [
+    col(r => `<strong>${esc(r.reg_no)}</strong>`),
+    col(r => chip(r.out_type, r.out_type === 'หนังสือเวียน' ? 'purple' : 'blue'), r => r.out_type),
+    col(r => esc(thDate(r.doc_date)), r => r.doc_date),
+    col(r => esc(r.to_org), null, 'wrap'),
+    col(r => esc(r.subject), null, 'wrap'),
+    col(r => esc(r.department)),
+    actCol(r => tbtn('viewFile', 'fa-file-pdf', 'ดูไฟล์', 'outline-primary', `data-kind="outgoing" data-id="${esc(r.out_id)}" data-title="หนังสือส่ง ${esc(r.reg_no)}"`))
+  ]);
+  colFilter('tblOutgoing', 1, byId('filterOutType').value);
+}
+on('filterOutType', 'change', e => colFilter('tblOutgoing', 1, e.target.value));
+function updateOutHint() {
+  const circ = byId('outTypeCir').checked, shared = State.settings.out_circular_shared === 'TRUE';
+  byId('outNumberHint').textContent = circ ? (shared ? 'หนังสือเวียนใช้เลขชุดเดียวกับหนังสือส่งทั่วไป' : 'หนังสือเวียนใช้เลขแยกชุดของตนเอง') : 'ออกเลขตามชุดหนังสือส่งทั่วไป';
+}
+['outTypeGen', 'outTypeCir'].forEach(id => on(id, 'change', updateOutHint));
+function newOutgoing() {
+  const form = byId('formOutgoing'); resetForm(form); form.elements.doc_date.value = todayISO(); updateOutHint(); modalShow('modalOutgoing');
+}
+submit('formOutgoing', async (form, fd) => {
+  const up = await readUpload(form.elements.file.files[0], ['pdf']);
+  const b64 = await bytesToBase64(up.bytes);
+  const r = await api('outgoing.create', { out_type: fd.out_type, doc_date: fd.doc_date, to_org: fd.to_org, subject: fd.subject, department: fd.department, file: b64 }, { loading: 'กำลังบันทึกและออกเลข...' });
+  modalHide('modalOutgoing');
+  swalOk('ออกเลขหนังสือส่งสำเร็จ', `เลขที่ <b>${esc(r.reg_no)}</b>`);
+  loadOutgoing();
+});
+
+/* =====================================================================
+ * 6) Orders & Announcements
+ * ===================================================================== */
+async function loadOrders() {
+  const rows = State.rows.orders = await api('orders.list');
+  fill('tblOrders', rows, [
+    col(r => chip(r.doc_type, r.doc_type === 'คำสั่ง' ? 'blue' : 'green'), r => r.doc_type),
+    col(r => `<strong>${esc(r.run_no)}</strong>`),
+    col(r => esc(thDate(r.doc_date)), r => r.doc_date),
+    col(r => esc(r.subject), null, 'wrap'),
+    col(r => esc(thDate(r.effective_date)), r => r.effective_date || ''),
+    col(r => r.visibility === 'ทุกคน' ? chip('ทุกคน', 'green') : chip('เฉพาะผู้เกี่ยวข้อง', 'amber'), r => r.visibility),
+    actCol(r => tbtn('viewFile', 'fa-file-pdf', 'ดูไฟล์', 'outline-primary', `data-kind="order" data-id="${esc(r.item_id)}" data-title="${esc(r.doc_type)} ${esc(r.run_no)}"`))
+  ]);
+  colFilter('tblOrders', 0, byId('filterOrderType').value);
+}
+on('filterOrderType', 'change', e => colFilter('tblOrders', 0, e.target.value));
+['visAll', 'visRes'].forEach(id => on(id, 'change', () => byId('orderAllowedWrap').classList.toggle('d-none', !byId('visRes').checked)));
+async function newOrder() {
+  const form = byId('formOrder'); resetForm(form); form.elements.doc_date.value = todayISO();
+  byId('orderAllowedWrap').classList.add('d-none');
+  const dir = await withLoading('กำลังโหลดรายชื่อ...', () => loadDirectory());
+  State.orderPicker = buildPicker({ list: 'orderAllowedList', search: 'orderAllowedSearch', count: 'orderAllowedCount', users: dir });
+  modalShow('modalOrder');
+}
+submit('formOrder', async (form, fd) => {
+  const up = await readUpload(form.elements.file.files[0], ['pdf']);
+  const payload = { doc_type: fd.doc_type, doc_date: fd.doc_date, effective_date: fd.effective_date || '', subject: fd.subject, visibility: fd.visibility, file: await bytesToBase64(up.bytes) };
+  if (fd.visibility === 'เฉพาะผู้เกี่ยวข้อง') {
+    payload.allowed_users = State.orderPicker();
+    if (!payload.allowed_users.length) throw new Error('กรุณาเลือกผู้ที่มีสิทธิ์ดูอย่างน้อย 1 คน');
+  }
+  const r = await api('orders.create', payload, { loading: 'กำลังบันทึกและออกเลข...' });
+  modalHide('modalOrder');
+  swalOk('ออกเลขสำเร็จ', `เลขที่ <b>${esc(r.run_no)}</b>`);
+  loadOrders();
+});
+
+/* =====================================================================
+ * 7) Tracking
+ * ===================================================================== */
+function updateNudge() { byId('nudgeCount').textContent = State.trackSel.size; }
+function trackView() {
+  const st = byId('filterTrackState').value, unread = byId('chkTrackUnread').checked;
+  return (State.rows.tracking || []).filter(r => (!st || r.due_state === st) && (!unread || r.read_status !== 'อ่านแล้ว'));
+}
+function renderTracking() {
+  const view = trackView();
+  fill('tblTracking', view, [
+    { data: null, orderable: false, searchable: false, render: (d, t, r) => t === 'display' ? (r.task_status !== 'เสร็จสิ้น' ? `<input type="checkbox" class="form-check-input chk-track" value="${esc(r.task_id)}" ${State.trackSel.has(r.task_id) ? 'checked' : ''} aria-label="เลือกงาน">` : '') : '' },
+    col(r => `<strong>${esc(r.reg_no)}</strong>`),
+    col(r => `${urgChip(r)}<div class="mt-1">${esc(r.subject)}</div>`, r => r.subject, 'wrap'),
+    col(r => `${esc(r.user_name)}<div class="small text-muted">${esc(r.department || '')}</div>`, r => r.user_name),
+    col(r => esc(thDate(r.due_date)), r => r.due_date || ''),
+    col(r => readChip(r), r => r.read_status),
+    col(r => stChip(r.task_status), r => r.task_status),
+    col(r => dueChip(r.due_state), r => r.due_state),
+    actCol(r => tbtn('timeline', 'fa-route', 'ประวัติ', 'outline-secondary', `data-id="${esc(r.doc_id)}"`))
+  ], rowClass);
+  updateNudge();
+}
+async function loadTracking() {
+  State.rows.tracking = await api('tracking.list', { include_done: byId('chkTrackDone').checked });
+  State.trackSel.clear(); byId('chkTrackAll').checked = false;
+  renderTracking();
+}
+['filterTrackState', 'chkTrackUnread'].forEach(id => on(id, 'change', () => { State.trackSel.clear(); byId('chkTrackAll').checked = false; renderTracking(); }));
+on('chkTrackDone', 'change', () => loadPage('tracking'));
+on('chkTrackAll', 'change', e => {
+  State.trackSel.clear();
+  if (e.target.checked) trackView().filter(r => r.task_status !== 'เสร็จสิ้น').forEach(r => State.trackSel.add(r.task_id));
+  State.tables.tblTracking.rows().invalidate().draw(false); updateNudge();
+});
+document.addEventListener('change', e => {
+  if (!e.target.classList.contains('chk-track')) return;
+  if (e.target.checked) State.trackSel.add(e.target.value); else State.trackSel.delete(e.target.value);
+  updateNudge();
+});
+async function nudgeSelected() {
+  const ids = Array.from(State.trackSel);
+  if (!ids.length) return Toast.fire({ icon: 'info', title: 'กรุณาเลือกงานที่ต้องการแจ้งเตือน' });
+  if (!await swalAsk('ส่งแจ้งเตือนซ้ำ', `ส่งแจ้งเตือนไปยังผู้รับผิดชอบ <b>${ids.length}</b> งาน?`, 'ส่งแจ้งเตือน')) return;
+  const r = await api('tracking.nudge', { task_ids: ids }, { loading: 'กำลังส่งแจ้งเตือน...' });
+  swalOk('ส่งแจ้งเตือนแล้ว', `ส่งสำเร็จ ${r.nudged} งาน` + (r.skipped ? `<br><span class="text-muted">ข้าม ${r.skipped} งาน (เพิ่งแจ้งเตือนภายใน 1 ชั่วโมง)</span>` : ''));
+  loadTracking();
+}
+const tlClass = a => /เกษียน|เปิดอ่าน|ปิดงาน|รายงานผล/.test(a) ? 'tl-green' : (/แจ้งเตือน/.test(a) ? 'tl-amber' : '');
+async function showTimeline(docId) {
+  const d = await api('tracking.timeline', { doc_id: docId }, { loading: 'กำลังโหลดประวัติ...' });
+  byId('tlDoc').innerHTML = `<div class="p-3 bg-light rounded border"><div class="fw-semibold mb-1">เลขรับ ${esc(d.doc.reg_no)} ${stChip(d.doc.status)}</div><div>${esc(d.doc.subject)}</div><div class="small text-muted mt-1">จาก ${esc(d.doc.from_org)} · รับเมื่อ ${esc(thDate(d.doc.received_date))} ${esc(d.doc.received_time)} น.</div></div>`;
+  const e = d.endorsement;
+  byId('tlEndorse').innerHTML = e
+    ? `<div class="alert alert-success py-2 mb-0"><strong>คำเกษียน:</strong> ${esc(e.comment)}<div class="small mt-1">โดย ${esc(e.director || '-')} · ${esc(thDateTime(e.endorsed_at))} · กำหนดแล้วเสร็จ ${esc(thDate(e.due_date))}</div></div>`
+    : '<div class="alert alert-warning py-2 mb-0">ยังไม่ได้เกษียน</div>';
+  qs('#tlTasks tbody').innerHTML = d.tasks.length ? d.tasks.map(t => `<tr><td>${esc(t.user_name)}</td><td>${readChip(t)}</td><td>${stChip(t.task_status)}${t.action_note ? `<div class="small text-muted">${esc(t.action_note)}</div>` : ''}</td><td>${dueChip(t.due_state)}</td></tr>`).join('') : '<tr><td colspan="4" class="text-center text-muted">ยังไม่มีการมอบหมาย</td></tr>';
+  byId('tlLogs').innerHTML = d.logs.map(l => `<li class="${tlClass(l.action)}"><div class="tl-time">${esc(thDateTime(l.time))}</div><div class="tl-title">${esc(l.action)}</div><div class="tl-detail">${esc(l.by)}${l.detail ? ' — ' + esc(l.detail) : ''}</div></li>`).join('') || '<li class="text-muted">ไม่มีประวัติ</li>';
+  modalShow('modalTimeline');
+}
+
+/* =====================================================================
+ * 8) Reports
+ * ===================================================================== */
+const REP_STATUS = { incoming: ['รอเกษียน', 'เกษียนแล้ว', 'กำลังดำเนินการ', 'เสร็จสิ้น'], outgoing: ['ลงทะเบียนแล้ว'], orders: ['คำสั่ง', 'ประกาศ'] };
+function fillRepStatus() { byId('repStatus').innerHTML = '<option value="">ทั้งหมด</option>' + REP_STATUS[byId('repType').value].map(s => `<option>${esc(s)}</option>`).join(''); }
+on('repType', 'change', fillRepStatus);
+async function initReports() {
+  fillRepStatus();
+  if (!State.directory) loadDirectory().catch(() => {});
+  if (!State.report) { byId('prtOrg').textContent = State.settings.org_name; qs('#tblReport thead').innerHTML = ''; qs('#tblReport tbody').innerHTML = '<tr><td class="text-center text-muted py-4">กำหนดเงื่อนไขแล้วกด "ค้นหา"</td></tr>'; }
+}
+submit('formReport', async (form, fd) => {
+  const d = await api('reports.query', { type: fd.type, date_from: fd.date_from || '', date_to: fd.date_to || '', department: fd.department || '', status: fd.status || '', keyword: fd.keyword || '' }, { loading: 'กำลังค้นหาข้อมูล...' });
+  const period = fd.date_from || fd.date_to ? `ระหว่างวันที่ ${fd.date_from ? thDateLong(fd.date_from) : 'เริ่มต้น'} ถึง ${fd.date_to ? thDateLong(fd.date_to) : 'ปัจจุบัน'}` : 'ข้อมูลทั้งหมด';
+  State.report = { title: d.title, columns: d.columns, rows: d.rows, period };
+  byId('prtOrg').textContent = State.settings.org_name; byId('prtTitle').textContent = d.title; byId('prtPeriod').textContent = period;
+  byId('prtCount').textContent = d.rows.length + ' รายการ';
+  byId('prtPrinted').textContent = 'พิมพ์เมื่อ ' + thDate(todayISO()) + ' โดย ' + State.user.full_name;
+  qs('#tblReport thead').innerHTML = '<tr>' + d.columns.map(c => `<th>${esc(c)}</th>`).join('') + '</tr>';
+  qs('#tblReport tbody').innerHTML = d.rows.length ? d.rows.map(r => '<tr>' + r.map((c, i) => `<td${i === 0 ? ' class="text-center"' : ''}>${esc(c)}</td>`).join('') + '</tr>').join('') : `<tr><td colspan="${d.columns.length}" class="text-center text-muted py-4">ไม่พบข้อมูล</td></tr>`;
+});
+const needReport = () => { if (State.report) return true; Toast.fire({ icon: 'info', title: 'กรุณาค้นหาข้อมูลก่อน' }); return false; };
+const sanitizeCell = v => { const s = String(v == null ? '' : v); return /^[=+\-@\t\r]/.test(s) ? "'" + s : s; };   // ป้องกัน formula injection
+function printReport() {
+  if (!needReport()) return;
+  const pg = byId('page-reports'); pg.classList.add('print-target');
+  setTimeout(() => { window.print(); pg.classList.remove('print-target'); }, 60);
+}
+function exportCsv() {
+  if (!needReport()) return;
+  const r = State.report;
+  const cell = v => { const s = sanitizeCell(v); return /^\d+[\/\-]\d+$/.test(s) ? `="${s}"` : '"' + s.replace(/"/g, '""') + '"'; };   // กัน Excel แปลงเลขรับเป็นวันที่
+  const lines = [[State.settings.org_name], [r.title], [r.period], [], r.columns].concat(r.rows).map(row => row.map(cell).join(','));
+  downloadBytes('\uFEFF' + lines.join('\r\n'), `${r.title}_${todayISO()}.csv`, 'text/csv;charset=utf-8');
+}
+function exportXls() {
+  if (!needReport()) return;
+  const r = State.report, n = r.columns.length;
+  const td = v => `<td style="mso-number-format:'\\@'">${esc(sanitizeCell(v))}</td>`;
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1">` +
+    `<tr><td colspan="${n}"><b>${esc(State.settings.org_name)}</b></td></tr><tr><td colspan="${n}"><b>${esc(r.title)}</b></td></tr><tr><td colspan="${n}">${esc(r.period)}</td></tr>` +
+    `<tr>${r.columns.map(c => `<th style="background:#e2e8f0">${esc(c)}</th>`).join('')}</tr>` + r.rows.map(row => '<tr>' + row.map(td).join('') + '</tr>').join('') + '</table></body></html>';
+  downloadBytes(new TextEncoder().encode(html), `${r.title}_${todayISO()}.xls`, 'application/vnd.ms-excel;charset=utf-8');
+}
+
+/* =====================================================================
+ * 9) Users, Profile, Settings
+ * ===================================================================== */
+async function loadUsers() {
+  const rows = State.rows.users = await api('users.list');
+  fill('tblUsers', rows, [
+    col(r => esc(r.username)), col(r => `<strong>${esc(r.full_name)}</strong>`), col(r => esc(r.position)), col(r => esc(r.department)),
+    col(r => chip(ROLE_LABEL[r.role] || r.role, r.role === 'Admin' ? 'red' : r.role === 'Director' ? 'purple' : r.role === 'Saraban' ? 'blue' : 'gray'), r => ROLE_LABEL[r.role] || r.role),
+    col(r => r.has_signature ? '<i class="fa-solid fa-circle-check text-success"></i>' : '<i class="fa-solid fa-minus text-muted"></i>', r => r.has_signature ? 'มี' : 'ไม่มี'),
+    col(r => stChip(r.status), r => r.status),
+    actCol(r => tbtn('editUser', 'fa-pen', 'แก้ไข', 'outline-primary', `data-id="${esc(r.user_id)}"`) + ' ' +
+      tbtn('resetPwd', 'fa-key', 'รีเซ็ตรหัสผ่าน', 'outline-secondary', `data-id="${esc(r.user_id)}"`) +
+      (r.user_id !== State.user.user_id ? ' ' + tbtn('toggleUser', r.status === 'ใช้งาน' ? 'fa-user-slash' : 'fa-user-check', r.status === 'ใช้งาน' ? 'ระงับ' : 'เปิดใช้', r.status === 'ใช้งาน' ? 'outline-danger' : 'outline-success', `data-id="${esc(r.user_id)}"`) : ''))
+  ]);
+}
+function openUserModal(row) {
+  const form = byId('formUser'); resetForm(form); byId('userSignature').value = '';
+  const edit = !!row;
+  // ป้องกัน user_id ค้างจากการแก้ไขบัญชีก่อนหน้าเมื่อเปิดโหมดเพิ่มผู้ใช้
+  form.elements.user_id.value = edit ? (row.user_id || '') : '';
+  byId('userModalTitle').textContent = edit ? 'แก้ไขผู้ใช้' : 'เพิ่มผู้ใช้';
+  byId('userPwdHint').classList.toggle('d-none', !edit);
+  form.elements.password.required = !edit; form.elements.password.minLength = 8;
+  if (edit) ['user_id', 'username', 'full_name', 'position', 'department', 'role', 'status', 'email', 'telegram_chat_id'].forEach(k => { form.elements[k].value = row[k] || ''; });
+  byId('userSigStatus').textContent = edit && row.has_signature ? 'มีลายเซ็นอยู่แล้ว อัปโหลดไฟล์ใหม่เพื่อแทนที่' : 'ยังไม่มีลายเซ็น';
+  modalShow('modalUser');
+}
+submit('formUser', async (form, fd) => {
+  const sigFile = byId('userSignature').files[0];
+  let sigB64 = null;
+  if (sigFile) sigB64 = await bytesToBase64((await readUpload(sigFile, ['png'], CFG.SIG_MAX_BYTES)).bytes);   // ตรวจก่อนบันทึกผู้ใช้
+  const r = await api('users.save', fd, { loading: 'กำลังบันทึกผู้ใช้...' });
+  if (sigB64) await api('users.uploadSignature', { user_id: r.user_id, file: sigB64 }, { loading: 'กำลังอัปโหลดลายเซ็น...' });
+  modalHide('modalUser'); Toast.fire({ icon: 'success', title: 'บันทึกผู้ใช้เรียบร้อย' });
+  State.directory = null; loadUsers();
+});
+async function resetPwd(el) {
+  const row = findRow('users', el.dataset.id); if (!row) return;
+  const r = await Swal.fire({ title: 'รีเซ็ตรหัสผ่าน', html: `ตั้งรหัสผ่านใหม่ให้ <b>${esc(row.full_name)}</b>`, input: 'password', inputAttributes: { autocomplete: 'new-password', placeholder: 'อย่างน้อย 8 ตัวอักษร' }, showCancelButton: true, confirmButtonText: 'บันทึก', cancelButtonText: 'ยกเลิก', inputValidator: v => (!v || v.length < 8) ? 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร' : null });
+  if (!r.isConfirmed) return;
+  await api('users.resetPassword', { user_id: row.user_id, new_password: r.value }, { loading: 'กำลังบันทึก...' });
+  swalOk('รีเซ็ตรหัสผ่านสำเร็จ', 'แจ้งรหัสผ่านใหม่ให้ผู้ใช้ทราบด้วยช่องทางที่ปลอดภัย');
+}
+async function toggleUser(el) {
+  const row = findRow('users', el.dataset.id); if (!row) return;
+  const next = row.status === 'ใช้งาน' ? 'ระงับ' : 'ใช้งาน';
+  if (!await swalAsk(next === 'ระงับ' ? 'ระงับสิทธิ์ผู้ใช้' : 'เปิดสิทธิ์ผู้ใช้', `${esc(row.full_name)} (${esc(row.username)})`, 'ยืนยัน', next === 'ระงับ' ? 'warning' : 'question')) return;
+  await api('users.setStatus', { user_id: row.user_id, status: next }, { loading: 'กำลังบันทึก...' });
+  State.directory = null; loadUsers();
+}
+
+/* ---------- Profile signature ---------- */
+async function openProfile() {
+  const box = byId('sigPreview'), form = byId('formSignature'); resetForm(form);
+  box.innerHTML = '<span class="text-muted small">กำลังโหลด...</span>';
+  modalShow('modalProfile');
+  try {
+    if (State.user.role === 'Teacher') box.innerHTML = `<span class="text-muted small">${State.user.has_signature ? 'อัปโหลดลายเซ็นแล้ว' : 'ยังไม่มีลายเซ็น'}</span>`;
+    else {
+      const s = await api('users.mySignature');
+      box.innerHTML = s ? `<img src="data:${esc(s.mime)};base64,${s.base64}" alt="ลายเซ็น">` : '<span class="text-muted small">ยังไม่มีลายเซ็น</span>';
+    }
+  } catch (e) { box.innerHTML = '<span class="text-muted small">โหลดไม่สำเร็จ</span>'; }
+}
+submit('formSignature', async form => {
+  const up = await readUpload(form.elements.file.files[0], ['png'], CFG.SIG_MAX_BYTES);
+  await api('users.uploadSignature', { file: await bytesToBase64(up.bytes) }, { loading: 'กำลังอัปโหลดลายเซ็น...' });
+  State.user.has_signature = true; store.save();
+  modalHide('modalProfile'); swalOk('อัปโหลดลายเซ็นสำเร็จ');
+});
+
+/* ---------- Settings ---------- */
+const CNT_LABEL = { incoming: 'หนังสือรับ', outgoing_general: 'หนังสือส่งทั่วไป', outgoing_circular: 'หนังสือเวียน (แยกชุด)', order: 'คำสั่ง', announce: 'ประกาศ' };
+async function loadSettings() {
+  const d = await api('settings.get'), s = d.settings || {};
+  qsa('[data-setting]').forEach(el => { const v = s[el.dataset.setting] == null ? '' : s[el.dataset.setting]; if (el.type === 'checkbox') el.checked = v === 'TRUE'; else el.value = v; });
+  qs('#tblCounters tbody').innerHTML = (d.counters || []).map(c => {
+    const m = c.key.match(/^counter_(.+)_(\d{4})$/);
+    return `<tr><td>${esc(m ? (CNT_LABEL[m[1]] || m[1]) + ' ปี ' + m[2] : c.key)}</td><td class="text-end">${esc(c.value)}</td></tr>`;
+  }).join('') || '<tr><td colspan="2" class="text-center text-muted">ยังไม่มีการออกเลข</td></tr>';
+  const yr = byId('formResetRun').elements.year; if (!yr.value) yr.value = +todayISO().slice(0, 4) + 543;
+}
+submit('formSettings', async () => {
+  const settings = {};
+  qsa('[data-setting]').forEach(el => { settings[el.dataset.setting] = el.type === 'checkbox' ? (el.checked ? 'TRUE' : 'FALSE') : el.value; });
+  State.settings = await api('settings.save', { settings }, { loading: 'กำลังบันทึกการตั้งค่า...' });
+  applyOrg(); Toast.fire({ icon: 'success', title: 'บันทึกการตั้งค่าแล้ว' });
+});
+submit('formResetRun', async (form, fd) => {
+  if (!await swalAsk('กำหนดเลขรัน', `เลขถัดไปของรายการนี้ ปี ${esc(fd.year)} จะเป็น <b>${+fd.value + 1}</b>`, 'ยืนยัน', 'warning')) return;
+  await api('settings.resetRun', { type: fd.type, year: fd.year, value: fd.value }, { loading: 'กำลังบันทึก...' });
+  Toast.fire({ icon: 'success', title: 'กำหนดเลขรันแล้ว' }); loadSettings();
+});
+async function testNotify() { await api('settings.testNotify', {}, { loading: 'กำลังส่งข้อความทดสอบ...' }); swalOk('ส่งข้อความทดสอบแล้ว', 'ตรวจสอบ Telegram หรืออีเมลของคุณ'); }
+
+/* =====================================================================
+ * Actions & global events
+ * ===================================================================== */
+const actions = {
+  toggleSidebar() { if (window.innerWidth < 992) document.body.classList.toggle('sb-open'); else document.body.classList.toggle('sb-collapsed'); },
+  closeSidebar() { document.body.classList.remove('sb-open'); },
+  logout() { clearSession(); showLogin(); },
+  openProfile, openPassword() { resetForm(byId('formPassword')); modalShow('modalPassword'); },
+  refreshPage() { return loadPage(State.page); },
+  togglePassword(el) { const i = byId(el.dataset.target); i.type = i.type === 'password' ? 'text' : 'password'; const ic = el.querySelector('i'); ic.classList.toggle('fa-eye'); ic.classList.toggle('fa-eye-slash'); },
+  newIncoming, newOutgoing, newOrder, newUser() { openUserModal(null); }, nudgeSelected, printReport, exportCsv, exportXls, testNotify,
+  viewFile(el) { const p = { kind: el.dataset.kind, id: el.dataset.id }; if (el.dataset.variant) p.variant = el.dataset.variant; return openPdf(p, el.dataset.title); },
+  async downloadFile(el) { const f = await api('file.get', { kind: el.dataset.kind, id: el.dataset.id }, { loading: 'กำลังเตรียมไฟล์...' }); downloadBytes(b64ToBytes(f.base64), f.name, f.mime); },
+  timeline(el) { return showTimeline(el.dataset.id); },
+  restamp, openEndorse, openTask, completeTask, resetPwd, toggleUser,
+  editUser(el) { const r = findRow('users', el.dataset.id); if (r) openUserModal(r); },
+  useTemplate(el) { const t = byId('endComment'), v = t.value.trim(); if (v.indexOf(el.dataset.text) < 0) t.value = v ? v + ' ' + el.dataset.text : el.dataset.text; t.focus(); }
+};
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-action]');
+  if (el) { const fn = actions[el.dataset.action]; if (fn && !el.disabled) { e.preventDefault(); Promise.resolve(fn(el)).catch(fail); } return; }
+  const go = e.target.closest('[data-go]');
+  if (go) {
+    let p = go.dataset.go;
+    if (!canAccess(p)) { if (p === 'endorse') byId('filterIncomingStatus').value = 'รอเกษียน'; p = 'incoming'; }
+    navigate(p); return;
+  }
+  const link = e.target.closest('.sb-link[data-page]');
+  if (link) { e.preventDefault(); navigate(link.dataset.page); }
+});
+document.addEventListener('shown.bs.tab', () => Object.values(State.tables).forEach(t => t.columns.adjust()));
+
+/* =====================================================================
+ * Boot
+ * ===================================================================== */
+function injectStyles() {
+  const s = document.createElement('style');
+  s.textContent = '.pdf-pages{background:#525659;overflow:auto;height:68vh;min-height:420px;padding:8px;-webkit-overflow-scrolling:touch}' +
+    '#modalPdf .pdf-pages{height:78vh}.pdf-page{background:#fff;margin:0 auto 8px;box-shadow:0 1px 4px rgba(0,0,0,.4)}' +
+    '.pdf-img{display:block;max-width:100%;margin:0 auto;background:#fff}';
+  document.head.appendChild(s);
+}
+async function boot() {
+  injectStyles();
+  ['pdfFrame', 'endorseFrame'].forEach(id => { const f = byId(id), d = document.createElement('div'); d.id = id; d.className = 'pdf-pages'; d.setAttribute('role', 'document'); f.replaceWith(d); });
+  Chart.defaults.font.family = "'Noto Sans Thai','Prompt','Sarabun',sans-serif";
+  try { const o = localStorage.getItem(CFG.ORG_KEY); if (o) byId('loginOrgName').textContent = o; } catch (e) { /* ignore */ }
+  const s = store.get();
+  if (s && s.token && s.expires > Date.now()) {
+    State.token = s.token; State.expires = s.expires; State.remember = !!s.remember;
+    try {
+      const me = await api('auth.me', {}, { loading: 'กำลังตรวจสอบเซสชัน...' });
+      State.user = me.user; State.settings = me.settings; store.save(); enterApp(); return;
+    } catch (e) { clearSession(); }
+  }
+  showLogin();
+}
+boot();
+})();
+</script>
